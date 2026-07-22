@@ -19,6 +19,7 @@ import {
 } from "@/lib/speechRecognition";
 import { speak } from "@/lib/tts";
 import { askAssistant } from "@/lib/assistant";
+import { buildBriefingContext } from "@/lib/briefingContext";
 
 export type VoiceStatus =
   | "inactive" // mic not yet granted, clap-to-wake off
@@ -124,7 +125,13 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       stopMicLevelLoop();
       setStatus("thinking");
 
-      const reply = await askAssistant(heard);
+      // Live data (schedule, weather, news, date/time, quote/word) so
+      // JARVIS can actually answer "give me a daily briefing" — or any
+      // question touching this stuff — with real specifics instead of
+      // guessing. Cheap fields resolve instantly; weather/news have a
+      // short timeout and are just omitted if they don't come back in time.
+      const context = await buildBriefingContext();
+      const reply = await askAssistant(heard, context);
       setLastResponse(reply);
       setStatus("speaking");
       await new Promise<void>((resolve) => {

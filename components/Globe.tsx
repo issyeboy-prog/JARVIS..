@@ -287,6 +287,21 @@ export default function Globe() {
     levelRef.current = Math.max(micLevel, ttsLevel);
   }, [micLevel, ttsLevel]);
 
+  // Subtitles as an audio fallback: what you said (during thinking), or
+  // JARVIS's last reply otherwise. lastResponse already persists in
+  // context between turns, so this doesn't need a timer to "linger" — it
+  // just stays on screen, readable at your own pace, until the next
+  // command overwrites it. Hidden during active listening so it doesn't
+  // look like stale leftover text while a fresh command is being captured.
+  const subtitle =
+    status === "listening"
+      ? null
+      : status === "thinking" && transcript
+        ? { text: `"${transcript}"`, color: "text-cyan-200" }
+        : lastResponse
+          ? { text: lastResponse, color: "text-emerald-300" }
+          : null;
+
   const toggleHandTracking = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (trackerRef.current) {
@@ -428,13 +443,19 @@ export default function Globe() {
       const centerY = h / 2;
 
       // Same hand-driven rotation velocity that moves the globe also drives
-      // every planet's water — heavily damped ("slower speed") so it lags
-      // and sloshes rather than snapping to match the motion instantly.
-      const tiltTarget = Math.max(-0.4, Math.min(0.4, rotVelRef.current.y * 1.4));
+      // every planet's water, but as a proper lightly-damped pendulum now
+      // rather than a quick proportional spring: a weak restoring force
+      // plus near-1 velocity retention means it takes real time to build
+      // up momentum and keeps sloshing/overshooting past level for a
+      // while before finally settling, instead of just tracking the hand.
+      const tiltTarget = Math.max(-0.35, Math.min(0.35, rotVelRef.current.y * 0.9));
+      const RESTORING_FORCE = 0.0022;
+      const INERTIA = 0.975;
       waterStates.forEach((ws) => {
-        ws.vel = ws.vel * 0.9 + (tiltTarget - ws.tilt) * 0.012;
+        ws.vel += (tiltTarget - ws.tilt) * RESTORING_FORCE;
+        ws.vel *= INERTIA;
         ws.tilt += ws.vel;
-        ws.phase += 0.015 + Math.abs(ws.vel) * 3;
+        ws.phase += 0.01 + Math.abs(ws.vel) * 4;
       });
 
       LINEUP.forEach((planet, i) => {
@@ -483,15 +504,6 @@ export default function Globe() {
     active: "✋ Tracking — tap to stop",
     error: "Camera unavailable",
   };
-
-  // Subtitles: what you said (once captured, during thinking) or what
-  // JARVIS is saying (while speaking) — never both at once.
-  const subtitle =
-    status === "speaking" && lastResponse
-      ? { text: lastResponse, color: "text-emerald-300" }
-      : status === "thinking" && transcript
-        ? { text: `"${transcript}"`, color: "text-cyan-200" }
-        : null;
 
   return (
     // Fixed full-viewport, deliberately outside the panel grid's flow — a

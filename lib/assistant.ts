@@ -14,12 +14,12 @@ function cannedResponse(text: string): string {
   return `I heard: ${text}`;
 }
 
-export async function askAssistant(text: string): Promise<string> {
+export async function askAssistant(text: string, context?: string): Promise<string> {
   try {
     const res = await fetch("/api/assistant", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, context }),
     });
     if (res.ok) {
       const data = (await res.json()) as { reply: string };
