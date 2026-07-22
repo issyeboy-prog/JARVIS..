@@ -37,6 +37,7 @@ interface VoiceContextValue {
   // Which TTS engine actually produced the last response, and why it fell
   // back if it did — otherwise this failure mode is a total black box.
   lastTtsEngine: TtsEngineReport | null;
+  lastError: string | null;
   supported: boolean;
   activate: () => Promise<void>;
   talkNow: () => Promise<void>; // tap-to-talk shortcut, skips the wake phrase
@@ -62,6 +63,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [transcript, setTranscript] = useState("");
   const [lastResponse, setLastResponse] = useState("");
   const [lastTtsEngine, setLastTtsEngine] = useState<TtsEngineReport | null>(null);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   const stopClapDetectorRef = useRef<(() => void) | null>(null);
   const stopLevelLoopRef = useRef<(() => void) | null>(null);
@@ -108,6 +110,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   // straight to answering instead of opening a second listening round.
   const handleCommand = useCallback(async (preHeard?: string) => {
     setStatus("listening");
+    setLastError(null);
     try {
       // activate()/talkNow() resume the AudioContext, but that only covers
       // turns starting from a fresh tap. A clap or the background "Jarvis"
@@ -145,8 +148,21 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
           onEngine: setLastTtsEngine,
         });
       });
-    } catch {
-      // timed out or no speech — just go back to idle
+    } catch (err) {
+      // Previously silent — status would just flicker back to idle with
+      // zero visible feedback, indistinguishable from "nothing happened."
+      // Surfacing it is what let "no audio" and "no subtitles" finally get
+      // traced to the same root cause: recognition never completing.
+      const message = err instanceof Error ? err.message : String(err);
+      const friendly =
+        message === "timeout"
+          ? "Didn't catch anything — try again"
+          : message === "recognition-error"
+            ? "Speech recognition error — check mic permission"
+            : message === "speech-recognition-unsupported"
+              ? "Speech recognition isn't supported in this browser"
+              : `Error: ${message}`;
+      setLastError(friendly);
     } finally {
       stopMicLevelLoop();
       setTtsLevel(0);
@@ -213,6 +229,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         transcript,
         lastResponse,
         lastTtsEngine,
+        lastError,
         supported,
         activate,
         talkNow,

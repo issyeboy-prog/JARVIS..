@@ -261,7 +261,7 @@ const STATUS_LABEL: Record<VoiceStatus, string> = {
 type HandStatus = "off" | "starting" | "active" | "error";
 
 export default function Globe() {
-  const { micLevel, ttsLevel, status, transcript, lastResponse, activate, talkNow } =
+  const { micLevel, ttsLevel, status, transcript, lastResponse, lastError, activate, talkNow } =
     useVoice();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -293,14 +293,18 @@ export default function Globe() {
   // just stays on screen, readable at your own pace, until the next
   // command overwrites it. Hidden during active listening so it doesn't
   // look like stale leftover text while a fresh command is being captured.
+  // A failed attempt (e.g. recognition timeout) now shows an explicit
+  // error instead of silently reverting to idle with nothing on screen.
   const subtitle =
     status === "listening"
       ? null
       : status === "thinking" && transcript
         ? { text: `"${transcript}"`, color: "text-cyan-200" }
-        : lastResponse
-          ? { text: lastResponse, color: "text-emerald-300" }
-          : null;
+        : lastError
+          ? { text: lastError, color: "text-amber-300" }
+          : lastResponse
+            ? { text: lastResponse, color: "text-emerald-300" }
+            : null;
 
   const toggleHandTracking = async (e: React.MouseEvent) => {
     e.stopPropagation();
