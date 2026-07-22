@@ -7,6 +7,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { createMicAnalyser, getLevel, resumeAudio } from "@/lib/audioEngine";
 import { startClapDetector } from "@/lib/clapDetector";
@@ -36,6 +37,12 @@ interface VoiceContextValue {
 
 const VoiceContext = createContext<VoiceContextValue | null>(null);
 
+// Speech-recognition support never changes at runtime, so there's nothing
+// to subscribe to — this just satisfies useSyncExternalStore's contract.
+function noopSubscribe() {
+  return () => {};
+}
+
 // Stand-in for a real command backend. Swap this out once JARVIS is wired
 // to an actual assistant/LLM.
 function respondTo(text: string): string {
@@ -57,12 +64,14 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const stopClapDetectorRef = useRef<(() => void) | null>(null);
   const stopLevelLoopRef = useRef<(() => void) | null>(null);
-  // Optimistic default so server and first client render match; corrected
-  // right after mount, when `window` is actually available to check.
-  const [supported, setSupported] = useState(true);
-  useEffect(() => {
-    setSupported(isSpeechRecognitionSupported());
-  }, []);
+  // Feature detection differs between server (no `window`) and client, so
+  // this needs the getServerSnapshot escape hatch rather than plain state
+  // — it keeps the very first client render matching the server's.
+  const supported = useSyncExternalStore(
+    noopSubscribe,
+    isSpeechRecognitionSupported,
+    () => true
+  );
 
   const runMicLevelLoop = useCallback(async () => {
     stopLevelLoopRef.current?.();

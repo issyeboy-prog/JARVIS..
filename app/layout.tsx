@@ -43,6 +43,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <RegisterServiceWorker />
+        <div className="holo-scanlines" />
         <VoiceProvider>{children}</VoiceProvider>
       </body>
     </html>
