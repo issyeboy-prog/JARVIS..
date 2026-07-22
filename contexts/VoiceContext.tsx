@@ -17,6 +17,7 @@ import {
   matchesWakePhrase,
 } from "@/lib/speechRecognition";
 import { speak } from "@/lib/tts";
+import { askAssistant } from "@/lib/assistant";
 
 export type VoiceStatus =
   | "inactive" // mic not yet granted, clap-to-wake off
@@ -41,19 +42,6 @@ const VoiceContext = createContext<VoiceContextValue | null>(null);
 // to subscribe to — this just satisfies useSyncExternalStore's contract.
 function noopSubscribe() {
   return () => {};
-}
-
-// Stand-in for a real command backend. Swap this out once JARVIS is wired
-// to an actual assistant/LLM.
-function respondTo(text: string): string {
-  const t = text.toLowerCase();
-  if (t.includes("time")) {
-    return `It's ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`;
-  }
-  if (t.includes("hello") || t.includes("hi ")) {
-    return "Hello. I'm listening.";
-  }
-  return `I heard: ${text}`;
 }
 
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
@@ -110,7 +98,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       stopMicLevelLoop();
       setStatus("thinking");
 
-      const reply = respondTo(heard);
+      const reply = await askAssistant(heard);
       setLastResponse(reply);
       setStatus("speaking");
       await new Promise<void>((resolve) => {
