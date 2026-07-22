@@ -30,18 +30,23 @@ body {
 
 .glass-panel {
   border-radius: 1rem;
-  border: 1px solid rgba(56, 189, 248, 0.15);
-  background: rgba(8, 22, 36, 0.45);
-  backdrop-filter: blur(10px);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  background: rgba(8, 22, 36, 0.3);
+  backdrop-filter: blur(8px);
   padding: 1.25rem;
+  box-shadow:
+    0 0 24px rgba(56, 189, 248, 0.05) inset,
+    0 0 1px rgba(56, 189, 248, 0.4);
 }
 
 /* Holographic HUD accents ------------------------------------------- */
 
 .holo-panel {
   position: relative;
-  animation: holo-flicker 7s ease-in-out infinite;
-  animation-delay: var(--holo-delay, 0s);
+  animation:
+    holo-flicker 7s ease-in-out infinite,
+    holo-glitch 11s ease-in-out infinite;
+  animation-delay: var(--holo-delay, 0s), var(--holo-delay, 0s);
 }
 
 .holo-panel::before,
@@ -80,8 +85,8 @@ body {
   z-index: 40;
   background: repeating-linear-gradient(
     to bottom,
-    rgba(148, 218, 255, 0.035) 0px,
-    rgba(148, 218, 255, 0.035) 1px,
+    rgba(148, 218, 255, 0.055) 0px,
+    rgba(148, 218, 255, 0.055) 1px,
     transparent 2px,
     transparent 4px
   );
@@ -109,5 +114,22 @@ body {
   }
   96% {
     opacity: 1;
+  }
+}
+
+/* A brief horizontal jolt, like a projection losing sync for a single
+   frame — reinforces "holographic" beyond just the ambient glow. Only
+   touches transform, so it doesn't fight glass-panel's own box-shadow. */
+@keyframes holo-glitch {
+  0%,
+  97%,
+  100% {
+    transform: translateX(0);
+  }
+  97.5% {
+    transform: translateX(-2px);
+  }
+  98.5% {
+    transform: translateX(2px);
   }
 }

@@ -17,7 +17,7 @@ const MOCK_EVENTS: Event[] = [
 export default function SchedulePanel() {
   return (
     <div className="flex h-full flex-col gap-3">
-      <h2 className="text-xs uppercase tracking-[0.3em] text-cyan-400/70">
+      <h2 className="text-xs uppercase tracking-[0.3em] text-cyan-400/70 holo-text">
         Schedule
       </h2>
       <ul className="flex flex-1 flex-col gap-2 overflow-y-auto">

@@ -22,7 +22,7 @@ export default function Clock() {
   return (
     <div className="flex flex-col gap-1">
       <span
-        className="text-xs uppercase tracking-[0.3em] text-cyan-400/70"
+        className="text-xs uppercase tracking-[0.3em] text-cyan-400/70 holo-text"
         suppressHydrationWarning
       >
         {greeting(now.getHours())}

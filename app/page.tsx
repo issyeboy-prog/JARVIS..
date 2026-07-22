@@ -1,6 +1,6 @@
 "use client";
 
-import Nebula from "@/components/Nebula";
+import Globe from "@/components/Globe";
 import Clock from "@/components/Clock";
 import SchedulePanel from "@/components/SchedulePanel";
 import WeatherPanel from "@/components/WeatherPanel";
@@ -36,7 +36,7 @@ export default function Home() {
         </div>
 
         <div className="relative order-first min-h-[480px] lg:order-none lg:col-start-2 lg:row-span-3 lg:row-start-1">
-          <Nebula />
+          <Globe />
         </div>
 
         <div className="glass-panel holo-panel lg:col-start-1 lg:row-start-2" style={{ "--holo-delay": "2s" } as React.CSSProperties}>
