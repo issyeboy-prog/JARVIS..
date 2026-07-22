@@ -109,6 +109,19 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   // itself (e.g. "Jarvis, what's the weather"). When present, skips
   // straight to answering instead of opening a second listening round.
   const handleCommand = useCallback(async (preHeard?: string) => {
+    // Stop the background clap/wake-word listeners synchronously, right
+    // now — not by waiting for the status-change effect below to notice
+    // and tear them down. That teardown is scheduled on React's next
+    // render, which is not guaranteed to happen before the code below
+    // tries to start a fresh SpeechRecognition instance. Two recognizers
+    // racing is a likely cause of "listening" getting stuck: some browsers
+    // don't fire onerror when start() collides with a still-active
+    // session, they just silently do nothing.
+    stopClapDetectorRef.current?.();
+    stopClapDetectorRef.current = null;
+    stopWakeListenerRef.current?.();
+    stopWakeListenerRef.current = null;
+
     setStatus("listening");
     setLastError(null);
     try {

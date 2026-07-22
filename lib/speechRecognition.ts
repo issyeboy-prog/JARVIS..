@@ -68,7 +68,15 @@ export function listenOnce(options?: {
     };
     recognition.onend = () => clearTimeout(timeout);
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (err) {
+      // e.g. a still-active recognizer from a race with the background
+      // listener — reject explicitly and clear the now-orphaned timer
+      // rather than leaving it to fire (harmlessly, but untidily) later.
+      clearTimeout(timeout);
+      reject(err instanceof Error ? err : new Error("recognition-start-failed"));
+    }
   });
 }
 
