@@ -35,7 +35,7 @@ const WASM_URL =
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task";
 
-const SMOOTHING = 0.4; // higher = snappier/less smooth, lower = smoother/more lag
+const SMOOTHING = 0.55; // higher = snappier/less smooth, lower = smoother/more lag
 
 let recognizerPromise: Promise<GestureRecognizer> | null = null;
 

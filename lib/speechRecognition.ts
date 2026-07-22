@@ -72,11 +72,27 @@ export function listenOnce(options?: {
   });
 }
 
-// Loose match so minor mis-transcriptions ("wake up dad's home") still count.
-export function matchesWakePhrase(transcript: string): boolean {
-  const t = transcript.toLowerCase().replace(/[^a-z\s]/g, "");
-  const required = ["wake", "home"];
-  return required.every((word) => t.includes(word));
+// Detects a wake-word at the start of an utterance and returns whatever
+// was said after it — so "Jarvis, what's the weather" or "wake up daddy's
+// home, what's the weather" both work as ONE spoken utterance instead of
+// needing a separate listening round afterward. Returns:
+//  - the trailing command text (possibly "") if a wake-word was found
+//  - null if no wake-word was found at all
+export function extractCommand(transcript: string): string | null {
+  const t = transcript.trim();
+  const lower = t.toLowerCase();
+
+  const jarvisIdx = lower.indexOf("jarvis");
+  if (jarvisIdx !== -1) {
+    return t.slice(jarvisIdx + "jarvis".length).replace(/^[,.\s]+/, "");
+  }
+
+  const wakeMatch = lower.match(/wake\s*up.*?home/);
+  if (wakeMatch && wakeMatch.index !== undefined) {
+    return t.slice(wakeMatch.index + wakeMatch[0].length).replace(/^[,.\s]+/, "");
+  }
+
+  return null;
 }
 
 // Keeps a SpeechRecognition session running in the background so the wake
@@ -124,6 +140,10 @@ export function startContinuousListening(
 
   return () => {
     stopped = true;
-    recognition?.stop();
+    // abort() over stop(): stop() waits to flush a final result, which
+    // extends how long this session holds onto the recognizer before a
+    // fresh listenOnce() can safely start one — abort() releases it
+    // immediately.
+    recognition?.abort();
   };
 }

@@ -8,6 +8,7 @@ import NotificationsPanel from "@/components/NotificationsPanel";
 import SystemStatusPanel from "@/components/SystemStatusPanel";
 import NotesPanel from "@/components/NotesPanel";
 import NewsPanel from "@/components/NewsPanel";
+import WaveformPanel from "@/components/WaveformPanel";
 
 export default function Home() {
   return (
@@ -34,7 +35,7 @@ export default function Home() {
           <WeatherPanel />
         </div>
 
-        <div className="relative order-first min-h-[420px] lg:order-none lg:col-start-2 lg:row-span-3 lg:row-start-1">
+        <div className="relative order-first min-h-[480px] lg:order-none lg:col-start-2 lg:row-span-3 lg:row-start-1">
           <Nebula />
         </div>
 
@@ -52,7 +53,11 @@ export default function Home() {
           <SystemStatusPanel />
         </div>
 
-        <div className="glass-panel holo-panel min-h-[220px] lg:col-span-3" style={{ "--holo-delay": "6s" } as React.CSSProperties}>
+        <div className="glass-panel holo-panel lg:col-span-3" style={{ "--holo-delay": "6s" } as React.CSSProperties}>
+          <WaveformPanel />
+        </div>
+
+        <div className="glass-panel holo-panel min-h-[220px] lg:col-span-3" style={{ "--holo-delay": "7s" } as React.CSSProperties}>
           <NewsPanel />
         </div>
       </div>

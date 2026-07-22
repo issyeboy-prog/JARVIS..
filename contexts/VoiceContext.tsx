@@ -12,9 +12,9 @@ import {
 import { createMicAnalyser, getLevel, resumeAudio } from "@/lib/audioEngine";
 import { startClapDetector } from "@/lib/clapDetector";
 import {
+  extractCommand,
   isSpeechRecognitionSupported,
   listenOnce,
-  matchesWakePhrase,
   startContinuousListening,
 } from "@/lib/speechRecognition";
 import { speak } from "@/lib/tts";
@@ -29,7 +29,8 @@ export type VoiceStatus =
 
 interface VoiceContextValue {
   status: VoiceStatus;
-  level: number; // 0..1 reactive amplitude driving the nebula
+  micLevel: number; // 0..1, live mic amplitude (you talking)
+  ttsLevel: number; // 0..1, live TTS playback amplitude (JARVIS talking)
   transcript: string;
   lastResponse: string;
   supported: boolean;
@@ -45,9 +46,15 @@ function noopSubscribe() {
   return () => {};
 }
 
+// Gives an aborted recognizer a moment to fully release before a fresh one
+// starts — starting a new SpeechRecognition instance while a previous one
+// is still tearing down is a common source of silently-failing listens.
+const RECOGNIZER_HANDOFF_MS = 200;
+
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<VoiceStatus>("inactive");
-  const [level, setLevel] = useState(0);
+  const [micLevel, setMicLevel] = useState(0);
+  const [ttsLevel, setTtsLevel] = useState(0);
   const [transcript, setTranscript] = useState("");
   const [lastResponse, setLastResponse] = useState("");
 
@@ -72,7 +79,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       let raf = 0;
       const tick = () => {
         if (stopped) return;
-        setLevel(getLevel(analyser, buffer));
+        setMicLevel(getLevel(analyser, buffer));
         raf = requestAnimationFrame(tick);
       };
       tick();
@@ -88,14 +95,22 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const stopMicLevelLoop = useCallback(() => {
     stopLevelLoopRef.current?.();
     stopLevelLoopRef.current = null;
-    setLevel(0);
+    setMicLevel(0);
   }, []);
 
-  const handleCommand = useCallback(async () => {
+  // preHeard: command text already captured as part of the wake utterance
+  // itself (e.g. "Jarvis, what's the weather"). When present, skips
+  // straight to answering instead of opening a second listening round.
+  const handleCommand = useCallback(async (preHeard?: string) => {
     setStatus("listening");
-    await runMicLevelLoop();
     try {
-      const heard = await listenOnce({ timeoutMs: 6000 });
+      let heard = preHeard?.trim();
+      if (!heard) {
+        // Give a just-aborted background recognizer a beat to release.
+        await new Promise((r) => setTimeout(r, RECOGNIZER_HANDOFF_MS));
+        await runMicLevelLoop();
+        heard = await listenOnce({ timeoutMs: 6000 });
+      }
       setTranscript(heard);
       stopMicLevelLoop();
       setStatus("thinking");
@@ -105,7 +120,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       setStatus("speaking");
       await new Promise<void>((resolve) => {
         speak(reply, {
-          onLevel: setLevel,
+          onLevel: setTtsLevel,
           onEnd: resolve,
         });
       });
@@ -113,12 +128,15 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       // timed out or no speech — just go back to idle
     } finally {
       stopMicLevelLoop();
+      setTtsLevel(0);
       setStatus("idle");
     }
   }, [runMicLevelLoop, stopMicLevelLoop]);
 
-  // Two independent ways to wake up: a double-clap, or just saying the
-  // phrase — both jump straight into listening for the actual command.
+  // Two independent ways to wake up: a double-clap (always opens a fresh
+  // listen), or saying "Jarvis ..." / "wake up daddy's home ..." — the
+  // wake-word and command can be one utterance, so the trailing text goes
+  // straight to handleCommand instead of triggering a second listen.
   // Both only run while armed and idle, paused during listening/speaking
   // so JARVIS's own audio can't retrigger them.
   useEffect(() => {
@@ -131,13 +149,14 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
 
     stopClapDetectorRef.current = startClapDetector({
-      onDoubleClap: handleCommand,
+      onDoubleClap: () => handleCommand(),
       // Also drives the visible level meter/sphere while armed, so
       // there's live feedback for calibrating claps against a real room.
-      onLevel: setLevel,
+      onLevel: setMicLevel,
     });
-    stopWakeListenerRef.current = startContinuousListening((transcript) => {
-      if (matchesWakePhrase(transcript)) handleCommand();
+    stopWakeListenerRef.current = startContinuousListening((heard) => {
+      const command = extractCommand(heard);
+      if (command !== null) handleCommand(command);
     });
 
     return () => {
@@ -168,7 +187,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     <VoiceContext.Provider
       value={{
         status,
-        level,
+        micLevel,
+        ttsLevel,
         transcript,
         lastResponse,
         supported,

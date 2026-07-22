@@ -9,52 +9,75 @@ import {
 } from "@/lib/handGestures";
 
 interface Star {
-  x: number; // unit-sphere object-space coords, fixed at generation
-  y: number;
-  z: number;
-  hue: number;
-  lightness: number;
+  // Precomputed unit direction (from theta/phi) so per-frame work is just
+  // a scalar radius multiply, not a full re-derivation from angles.
+  dirX: number;
+  dirY: number;
+  dirZ: number;
+  theta: number;
+  phi: number;
+  baseR: number; // 0..1, cube-root-uniform so it fills the volume evenly
+  colorStyle: string; // precomputed "hsl(...)" — built once, not templated every frame
   size: number;
   twinklePhase: number;
   twinkleSpeed: number;
   cluster: 0 | 1; // which half this star belongs to when split
-  noiseSeed: number;
 }
 
-const STAR_COUNT = 650;
+// 1800 looked great but measured well under 60fps even outside this
+// sandbox's software-rendering handicap — dialed back for headroom on
+// less powerful hardware (a tablet, not a desktop GPU).
+const STAR_COUNT = 1100;
+// Camera distance in sphere-radius units for the perspective projection —
+// small enough for real parallax depth, comfortably clear of the max
+// warped radius so the denominator never approaches zero.
+const CAMERA_DIST = 2.6;
 
 function buildStars(): Star[] {
   const stars: Star[] = [];
   for (let i = 0; i < STAR_COUNT; i++) {
-    // Uniform distribution *within* the sphere's volume, not just its
-    // surface — cube-root the radius so it doesn't clump at the center.
-    const r = Math.cbrt(Math.random());
     const theta = Math.acos(2 * Math.random() - 1);
     const phi = Math.random() * Math.PI * 2;
+    const hue = 40 + Math.random() * 18; // gold -> yellow
+    const lightness = 55 + Math.random() * 35;
     stars.push({
-      x: r * Math.sin(theta) * Math.cos(phi),
-      y: r * Math.sin(theta) * Math.sin(phi),
-      z: r * Math.cos(theta),
-      hue: 40 + Math.random() * 18, // gold -> yellow
-      lightness: 55 + Math.random() * 35,
+      dirX: Math.sin(theta) * Math.cos(phi),
+      dirY: Math.sin(theta) * Math.sin(phi),
+      dirZ: Math.cos(theta),
+      theta,
+      phi,
+      baseR: Math.cbrt(Math.random()),
+      colorStyle: `hsl(${hue}, 90%, ${lightness}%)`,
       size: 0.6 + Math.random() * 1.8,
       twinklePhase: Math.random() * Math.PI * 2,
       twinkleSpeed: 0.6 + Math.random() * 2,
       cluster: Math.random() < 0.5 ? 0 : 1,
-      noiseSeed: Math.random() * 1000,
     });
   }
   return stars;
 }
 
+// Coherent (angle-based, not per-star-random) shape distortion — nearby
+// stars get similar multipliers, so this bulges and pinches whole regions
+// into lobes and tendrils rather than jittering each star independently.
+// Slowly evolves over time so the whole mass flows like a liquid instead
+// of holding a fixed asymmetric shape.
+function shapeWarp(theta: number, phi: number, t: number): number {
+  return (
+    1 +
+    0.22 * Math.sin(theta * 2.1 + phi * 1.3 + t * 1.1) +
+    0.14 * Math.sin(theta * 4.3 - phi * 2.4 + t * 1.7) +
+    0.1 * Math.sin(phi * 3.1 + theta * 1.7 + t * 0.8)
+  );
+}
+
 type HandStatus = "off" | "starting" | "active" | "error";
 
 export default function Nebula() {
-  const { level, status, activate, talkNow } = useVoice();
+  const { micLevel, ttsLevel, status, activate, talkNow } = useVoice();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const levelRef = useRef(level);
-  const statusRef = useRef(status);
+  const levelRef = useRef(0);
   const [stars] = useState<Star[]>(buildStars);
   const starsRef = useRef(stars);
 
@@ -81,11 +104,10 @@ export default function Nebula() {
   const splitRef = useRef(0);
 
   useEffect(() => {
-    levelRef.current = level;
-  }, [level]);
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
+    // React to whichever source is currently louder — you talking or
+    // JARVIS talking — so the sphere always reflects live voice activity.
+    levelRef.current = Math.max(micLevel, ttsLevel);
+  }, [micLevel, ttsLevel]);
 
   const toggleHandTracking = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -173,6 +195,16 @@ export default function Nebula() {
     const ctx2d = canvas.getContext("2d");
     if (!ctx2d) return;
 
+    // Preallocated once, reused every frame — avoids allocating a fresh
+    // object per star per frame (was ~1100 allocations/frame of GC churn).
+    const stars = starsRef.current;
+    const n = stars.length;
+    const projX = new Float32Array(n);
+    const projY = new Float32Array(n);
+    const projPersp = new Float32Array(n);
+    const indices = new Uint16Array(n);
+    for (let i = 0; i < n; i++) indices[i] = i;
+
     let raf = 0;
     let last = performance.now();
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -192,8 +224,9 @@ export default function Nebula() {
       last = now;
       const w = canvas.width;
       const h = canvas.height;
-      const baseScale = Math.min(w, h) * 0.42;
+      const baseScale = Math.min(w, h) * 0.46;
       const lvl = levelRef.current;
+      const warpT = now * 0.00035;
 
       // Liquid "breathing" — a slow ambient pulsation independent of audio,
       // so the whole thing never sits perfectly still even in silence.
@@ -203,13 +236,15 @@ export default function Nebula() {
       const FRICTION = 0.92;
       angularVelocityRef.current.x *= FRICTION;
       angularVelocityRef.current.y *= FRICTION;
-      rotationRef.current.y += (0.12 + angularVelocityRef.current.y) * dt;
+      rotationRef.current.y += (0.1 + angularVelocityRef.current.y) * dt;
       rotationRef.current.x += angularVelocityRef.current.x * dt;
 
+      // Snappier follow — tightened up from the previous pass, which felt
+      // laggy.
       currentOffsetRef.current.x +=
-        (targetOffsetRef.current.x - currentOffsetRef.current.x) * 0.22;
+        (targetOffsetRef.current.x - currentOffsetRef.current.x) * 0.35;
       currentOffsetRef.current.y +=
-        (targetOffsetRef.current.y - currentOffsetRef.current.y) * 0.22;
+        (targetOffsetRef.current.y - currentOffsetRef.current.y) * 0.35;
 
       const mergedCx = w / 2 + currentOffsetRef.current.x * w * 0.32;
       const mergedCy = h / 2 + currentOffsetRef.current.y * h * 0.32;
@@ -273,43 +308,54 @@ export default function Nebula() {
       drawGlowAndRings(centerA.x, centerA.y, clusterScale);
       if (split > 0.03) drawGlowAndRings(centerB.x, centerB.y, clusterScale);
 
-      // Depth-sort stars back-to-front so nearer ones draw over farther ones
-      const projected = starsRef.current.map((s) => {
-        const x1 = s.x * cosY + s.z * sinY;
-        const z1 = -s.x * sinY + s.z * cosY;
-        const y1 = s.y * cosX - z1 * sinX;
-        const z2 = s.y * sinX + z1 * cosX;
-        return { s, x1, y1, z2 };
-      });
-      projected.sort((a, b) => a.z2 - b.z2);
+      // Depth-sort stars back-to-front so nearer ones draw over farther
+      // ones. Position now comes from a real perspective projection
+      // (divide by camera-relative depth) instead of orthographic +
+      // shading, so rotation actually reads as 3D parallax. Writes into
+      // preallocated typed arrays rather than mapping to fresh objects.
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const warp = shapeWarp(s.theta, s.phi, warpT);
+        const r = s.baseR * warp;
+        const x = s.dirX * r;
+        const y = s.dirY * r;
+        const z = s.dirZ * r;
 
-      for (const { s, x1, y1, z2 } of projected) {
-        const depth = (z2 + 1.15) / 2.15; // ~0.07..1
-        const react = 1 + lvl * 0.5 + bounce * 0.8;
+        const x1 = x * cosY + z * sinY;
+        const z1 = -x * sinY + z * cosY;
+        const y1 = y * cosX - z1 * sinX;
+        const z2 = y * sinX + z1 * cosX;
+        projX[i] = x1;
+        projY[i] = y1;
+        projPersp[i] = CAMERA_DIST / (CAMERA_DIST - z2);
+      }
+      indices.sort((a, b) => projPersp[a] - projPersp[b]);
 
-        // Liquid wobble — cheap per-star pseudo-noise so the cluster
-        // ripples organically instead of moving as one rigid body.
-        const t = now * 0.0009;
-        const wobbleX = Math.sin(t + s.noiseSeed) * 0.035;
-        const wobbleY = Math.cos(t * 1.3 + s.noiseSeed * 1.7) * 0.035;
+      for (let k = 0; k < n; k++) {
+        const i = indices[k];
+        const s = stars[i];
+        const persp = projPersp[i];
+        const depth = Math.min(Math.max((persp - 0.6) / 1.7, 0), 1);
+        const react = (1 + lvl * 0.5 + bounce * 0.8) * persp;
 
-        // centerA/centerB already smoothly interpolate from the shared
-        // merged center (split=0) out to each hand's position (split=1),
-        // so stars ease apart continuously rather than snapping.
         const { x: cx, y: cy } = s.cluster === 0 ? centerA : centerB;
-
-        const px = cx + (x1 + wobbleX) * clusterScale * react;
-        const py = cy + (y1 + wobbleY) * clusterScale * react;
+        const px = cx + projX[i] * clusterScale * react;
+        const py = cy + projY[i] * clusterScale * react;
         const twinkle =
           0.55 + 0.45 * Math.sin(s.twinklePhase + now * 0.001 * s.twinkleSpeed);
-        const alpha = (0.2 + depth * 0.8) * (0.6 + twinkle * 0.4 + lvl * 0.2 + bounce * 0.3);
-        const size = s.size * dpr * (0.35 + depth * 0.85) * (1 + lvl * 0.3 + bounce * 0.5);
+        const alpha = (0.15 + depth * 0.85) * (0.6 + twinkle * 0.4 + lvl * 0.2 + bounce * 0.3);
+        const size = s.size * dpr * (0.25 + depth * 1.1) * (1 + lvl * 0.3 + bounce * 0.5);
 
+        // Reused precomputed color string + globalAlpha instead of
+        // templating a fresh hsla() string per star per frame — cuts a
+        // meaningful chunk of GC churn at this star count.
+        ctx2d.globalAlpha = Math.min(alpha, 1);
+        ctx2d.fillStyle = s.colorStyle;
         ctx2d.beginPath();
-        ctx2d.fillStyle = `hsla(${s.hue}, 90%, ${s.lightness}%, ${Math.min(alpha, 1)})`;
-        ctx2d.arc(px, py, Math.max(size, 0.4), 0, Math.PI * 2);
+        ctx2d.arc(px, py, Math.max(size, 0.35), 0, Math.PI * 2);
         ctx2d.fill();
       }
+      ctx2d.globalAlpha = 1;
 
       const drawCore = (cx: number, cy: number, sc: number) => {
         const coreR = sc * (0.1 + lvl * 0.06 + bounce * 0.08);
