@@ -2,17 +2,28 @@
 
 import { createMicAnalyser, getLevel } from "./audioEngine";
 
+export interface ClapDetectorOptions {
+  onDoubleClap: () => void;
+  // Fired every frame with the current mic level (0..1) — lets the UI
+  // show a live meter so the threshold below can actually be calibrated
+  // against a real device/room instead of guessed blind.
+  onLevel?: (level: number) => void;
+}
+
 // Listens to the mic for two sharp volume spikes within a short window —
 // a "clap clap" pattern — and fires onDoubleClap(). Pure amplitude
 // detection, no speech recognition, so it's cheap to leave running.
-export function startClapDetector(onDoubleClap: () => void): () => void {
+export function startClapDetector({
+  onDoubleClap,
+  onLevel,
+}: ClapDetectorOptions): () => void {
   let stopped = false;
   let analyser: AnalyserNode | null = null;
   let raf = 0;
 
-  const SPIKE_THRESHOLD = 0.35;
-  const REFRACTORY_MS = 250; // ignore re-triggers from the same clap's decay
-  const CLAP_WINDOW_MS = 900; // max gap allowed between the two claps
+  const SPIKE_THRESHOLD = 0.16;
+  const REFRACTORY_MS = 200; // ignore re-triggers from the same clap's decay
+  const CLAP_WINDOW_MS = 1000; // max gap allowed between the two claps
 
   let lastSpikeAt = 0;
   let firstClapAt = 0;
@@ -26,6 +37,7 @@ export function startClapDetector(onDoubleClap: () => void): () => void {
       const tick = () => {
         if (stopped || !analyser) return;
         const level = getLevel(analyser, buffer);
+        onLevel?.(level);
         const now = performance.now();
 
         if (level > SPIKE_THRESHOLD && now - lastSpikeAt > REFRACTORY_MS) {

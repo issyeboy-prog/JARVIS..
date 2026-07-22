@@ -7,6 +7,7 @@ import WeatherPanel from "@/components/WeatherPanel";
 import NotificationsPanel from "@/components/NotificationsPanel";
 import SystemStatusPanel from "@/components/SystemStatusPanel";
 import NotesPanel from "@/components/NotesPanel";
+import NewsPanel from "@/components/NewsPanel";
 import VoiceControl from "@/components/VoiceControl";
 import { useVoice } from "@/contexts/VoiceContext";
 
@@ -53,6 +54,10 @@ export default function Home() {
         </div>
         <div className="glass-panel holo-panel lg:col-start-3 lg:row-start-3" style={{ "--holo-delay": "5s" } as React.CSSProperties}>
           <SystemStatusPanel />
+        </div>
+
+        <div className="glass-panel holo-panel min-h-[220px] lg:col-span-3" style={{ "--holo-delay": "6s" } as React.CSSProperties}>
+          <NewsPanel />
         </div>
 
         <div className="glass-panel holo-panel lg:col-span-3">

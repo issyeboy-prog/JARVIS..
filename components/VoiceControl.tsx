@@ -11,7 +11,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function VoiceControl() {
-  const { status, transcript, lastResponse, supported, activate, talkNow } =
+  const { status, level, transcript, lastResponse, supported, activate, talkNow } =
     useVoice();
 
   if (!supported) {
@@ -31,6 +31,19 @@ export default function VoiceControl() {
       >
         {STATUS_LABEL[status]}
       </button>
+      {status === "idle" && (
+        <div className="flex w-48 items-center gap-2">
+          <span className="text-[10px] uppercase tracking-widest text-cyan-200/40">
+            Mic
+          </span>
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-cyan-500/10">
+            <div
+              className="h-full bg-cyan-400 transition-[width] duration-75"
+              style={{ width: `${Math.min(level * 100 * 2.5, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
       {transcript && (
         <p className="text-xs text-cyan-200/50">&ldquo;{transcript}&rdquo;</p>
       )}

@@ -136,8 +136,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   // listening/speaking so JARVIS's own audio can't retrigger it.
   useEffect(() => {
     if (status === "idle") {
-      stopClapDetectorRef.current = startClapDetector(() => {
-        handleWake();
+      stopClapDetectorRef.current = startClapDetector({
+        onDoubleClap: handleWake,
+        // Also drives the visible level meter/sphere while armed, so
+        // there's live feedback for calibrating claps against a real room.
+        onLevel: setLevel,
       });
     } else {
       stopClapDetectorRef.current?.();

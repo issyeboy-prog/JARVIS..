@@ -22,10 +22,17 @@ export async function resumeAudio(): Promise<void> {
 
 export function getMicStream(): Promise<MediaStream> {
   if (!micStreamPromise) {
+    // This stream only feeds our own amplitude analysis (clap detection,
+    // reactive-visual level metering) — never speech recognition, which
+    // manages its own separate capture internally. Noise suppression and
+    // auto gain control actively work against us here: AGC in particular
+    // will duck the gain right as a loud clap hits, which was likely why
+    // claps weren't registering. Raw signal is what we want.
     micStreamPromise = navigator.mediaDevices.getUserMedia({
       audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
       },
     });
   }

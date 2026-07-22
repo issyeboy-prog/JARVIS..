@@ -36,7 +36,7 @@ export default function WeatherPanel() {
   useEffect(() => {
     const load = (lat: number, lon: number) => {
       fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&temperature_unit=fahrenheit`
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code`
       )
         .then((r) => r.json())
         .then((data) => {
@@ -71,7 +71,7 @@ export default function WeatherPanel() {
       {weather && (
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-3xl text-cyan-50">
-            {weather.temperature}°
+            {weather.temperature}°C
           </span>
           <span className="text-sm text-cyan-200/70">
             {CODE_LABEL[weather.code] ?? "—"}

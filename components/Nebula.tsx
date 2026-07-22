@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { VoiceStatus } from "@/contexts/VoiceContext";
-import { startHandTracker, type HandTrackerHandle } from "@/lib/handTracker";
+import { startHandGestures, type HandGestureHandle } from "@/lib/handGestures";
 
 interface NebulaProps {
   level: number; // 0..1, smoothed audio amplitude (mic or TTS playback)
@@ -56,15 +56,19 @@ export default function Nebula({ level, status }: NebulaProps) {
 
   const [handStatus, setHandStatus] = useState<HandStatus>("off");
   const handStatusRef = useRef<HandStatus>("off");
-  const trackerRef = useRef<HandTrackerHandle | null>(null);
+  const trackerRef = useRef<HandGestureHandle | null>(null);
 
   // Rotation + drag-follow state, mutated straight from the animation and
-  // motion-tracking loops — deliberately not React state, this changes far
+  // hand-tracking loops — deliberately not React state, this changes far
   // too often for re-renders.
   const rotationRef = useRef({ x: 0, y: 0 });
   const angularVelocityRef = useRef({ x: 0, y: 0 });
   const currentOffsetRef = useRef({ x: 0, y: 0 });
   const targetOffsetRef = useRef({ x: 0, y: 0 });
+  const lastHandPosRef = useRef<{ x: number; y: number } | null>(null);
+  // Decays back to 0 each frame — a fist-close briefly spikes this to
+  // drive the shockwave/bounce effect.
+  const bounceRef = useRef(0);
 
   useEffect(() => {
     levelRef.current = level;
@@ -87,28 +91,46 @@ export default function Nebula({ level, status }: NebulaProps) {
     if (!video) return;
     setHandStatus("starting");
     try {
-      const DRAG_SENSITIVITY = 14;
-      const MAX_ANGULAR_VELOCITY = 6;
-      trackerRef.current = await startHandTracker(video, {
-        onMotion: (cx, cy, vx, vy) => {
+      // Direct drag: rotation tracks hand movement almost 1:1 as it moves.
+      const DRAG_SENSITIVITY = 26;
+      // Smaller contribution to momentum, so it keeps coasting briefly
+      // after the hand stops rather than snapping dead.
+      const MOMENTUM_SENSITIVITY = 9;
+      const MAX_ANGULAR_VELOCITY = 10;
+      lastHandPosRef.current = null;
+
+      trackerRef.current = await startHandGestures(video, {
+        onPosition: (cx, cy) => {
           targetOffsetRef.current = {
             x: Math.max(-1, Math.min(1, (cx - 0.5) * 2)),
             y: Math.max(-1, Math.min(1, (cy - 0.5) * 2)),
           };
-          angularVelocityRef.current.y = Math.max(
-            -MAX_ANGULAR_VELOCITY,
-            Math.min(
-              MAX_ANGULAR_VELOCITY,
-              angularVelocityRef.current.y + vx * DRAG_SENSITIVITY
-            )
-          );
-          angularVelocityRef.current.x = Math.max(
-            -MAX_ANGULAR_VELOCITY,
-            Math.min(
-              MAX_ANGULAR_VELOCITY,
-              angularVelocityRef.current.x + vy * DRAG_SENSITIVITY
-            )
-          );
+
+          const last = lastHandPosRef.current;
+          if (last) {
+            const dx = cx - last.x;
+            const dy = cy - last.y;
+            rotationRef.current.y += dx * DRAG_SENSITIVITY;
+            rotationRef.current.x += dy * DRAG_SENSITIVITY;
+            angularVelocityRef.current.y = Math.max(
+              -MAX_ANGULAR_VELOCITY,
+              Math.min(
+                MAX_ANGULAR_VELOCITY,
+                angularVelocityRef.current.y + dx * MOMENTUM_SENSITIVITY
+              )
+            );
+            angularVelocityRef.current.x = Math.max(
+              -MAX_ANGULAR_VELOCITY,
+              Math.min(
+                MAX_ANGULAR_VELOCITY,
+                angularVelocityRef.current.x + dy * MOMENTUM_SENSITIVITY
+              )
+            );
+          }
+          lastHandPosRef.current = { x: cx, y: cy };
+        },
+        onFist: () => {
+          bounceRef.current = 1;
         },
       });
       setHandStatus("active");
@@ -154,19 +176,26 @@ export default function Nebula({ level, status }: NebulaProps) {
       // Constant slow ambient spin, plus whatever hand-drag momentum is
       // active. Friction decays the drag momentum back toward the ambient
       // spin, giving a coast-to-rest "flicked trackball" feel.
-      const FRICTION = 0.94;
+      const FRICTION = 0.92;
       angularVelocityRef.current.x *= FRICTION;
       angularVelocityRef.current.y *= FRICTION;
       rotationRef.current.y += (0.12 + angularVelocityRef.current.y) * dt;
       rotationRef.current.x += angularVelocityRef.current.x * dt;
 
+      // Snappy follow — the whole sphere visibly tracks the hand's
+      // position, not just a subtle nudge.
       currentOffsetRef.current.x +=
-        (targetOffsetRef.current.x - currentOffsetRef.current.x) * 0.06;
+        (targetOffsetRef.current.x - currentOffsetRef.current.x) * 0.22;
       currentOffsetRef.current.y +=
-        (targetOffsetRef.current.y - currentOffsetRef.current.y) * 0.06;
+        (targetOffsetRef.current.y - currentOffsetRef.current.y) * 0.22;
 
-      const cx = w / 2 + currentOffsetRef.current.x * w * 0.16;
-      const cy = h / 2 + currentOffsetRef.current.y * h * 0.16;
+      const cx = w / 2 + currentOffsetRef.current.x * w * 0.32;
+      const cy = h / 2 + currentOffsetRef.current.y * h * 0.32;
+
+      // Fist-close shockwave: spikes to 1 in the tracker callback, decays
+      // back out over the next ~15-20 frames.
+      const bounce = bounceRef.current;
+      bounceRef.current *= 0.87;
 
       ctx2d.clearRect(0, 0, w, h);
 
@@ -175,13 +204,15 @@ export default function Nebula({ level, status }: NebulaProps) {
       const cosX = Math.cos(rotationRef.current.x);
       const sinX = Math.sin(rotationRef.current.x);
 
-      // Ambient glow behind the whole sphere
-      const glow = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, scale * 1.15);
-      glow.addColorStop(0, `rgba(250, 204, 21, ${0.16 + lvl * 0.14})`);
+      // Ambient glow behind the whole sphere — flashes brighter/wider on
+      // a fist-close bounce
+      const glowRadius = scale * (1.15 + bounce * 0.35);
+      const glow = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, glowRadius);
+      glow.addColorStop(0, `rgba(250, 204, 21, ${0.16 + lvl * 0.14 + bounce * 0.3})`);
       glow.addColorStop(1, "rgba(250, 204, 21, 0)");
       ctx2d.fillStyle = glow;
       ctx2d.beginPath();
-      ctx2d.arc(cx, cy, scale * 1.15, 0, Math.PI * 2);
+      ctx2d.arc(cx, cy, glowRadius, 0, Math.PI * 2);
       ctx2d.fill();
 
       // Thin holographic equator rings, tilted with the sphere's rotation
@@ -207,13 +238,15 @@ export default function Nebula({ level, status }: NebulaProps) {
 
       for (const { s, x1, y1, z2 } of projected) {
         const depth = (z2 + 1.15) / 2.15; // ~0.07..1
-        const react = 1 + lvl * 0.5;
+        // Bounce pushes stars radially outward in a shockwave, then they
+        // settle back as it decays.
+        const react = 1 + lvl * 0.5 + bounce * 0.8;
         const px = cx + x1 * scale * react;
         const py = cy + y1 * scale * react;
         const twinkle =
           0.55 + 0.45 * Math.sin(s.twinklePhase + now * 0.001 * s.twinkleSpeed);
-        const alpha = (0.2 + depth * 0.8) * (0.6 + twinkle * 0.4 + lvl * 0.2);
-        const size = s.size * dpr * (0.35 + depth * 0.85) * (1 + lvl * 0.3);
+        const alpha = (0.2 + depth * 0.8) * (0.6 + twinkle * 0.4 + lvl * 0.2 + bounce * 0.3);
+        const size = s.size * dpr * (0.35 + depth * 0.85) * (1 + lvl * 0.3 + bounce * 0.5);
 
         ctx2d.beginPath();
         ctx2d.fillStyle = `hsla(${s.hue}, 90%, ${s.lightness}%, ${Math.min(alpha, 1)})`;
@@ -222,9 +255,9 @@ export default function Nebula({ level, status }: NebulaProps) {
       }
 
       // Bright core
-      const coreR = scale * (0.1 + lvl * 0.06);
+      const coreR = scale * (0.1 + lvl * 0.06 + bounce * 0.08);
       const coreGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, coreR * 2.2);
-      coreGrad.addColorStop(0, `rgba(255, 250, 220, ${0.85 + lvl * 0.15})`);
+      coreGrad.addColorStop(0, `rgba(255, 250, 220, ${Math.min(0.85 + lvl * 0.15 + bounce * 0.2, 1)})`);
       coreGrad.addColorStop(1, "rgba(255, 250, 220, 0)");
       ctx2d.fillStyle = coreGrad;
       ctx2d.beginPath();
