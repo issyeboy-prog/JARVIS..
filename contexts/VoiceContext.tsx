@@ -15,6 +15,7 @@ import {
   isSpeechRecognitionSupported,
   listenOnce,
   matchesWakePhrase,
+  startContinuousListening,
 } from "@/lib/speechRecognition";
 import { speak } from "@/lib/tts";
 import { askAssistant } from "@/lib/assistant";
@@ -52,6 +53,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   const stopClapDetectorRef = useRef<(() => void) | null>(null);
   const stopLevelLoopRef = useRef<(() => void) | null>(null);
+  const stopWakeListenerRef = useRef<(() => void) | null>(null);
   // Feature detection differs between server (no `window`) and client, so
   // this needs the getServerSnapshot escape hatch rather than plain state
   // — it keeps the very first client render matching the server's.
@@ -115,42 +117,36 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [runMicLevelLoop, stopMicLevelLoop]);
 
-  const handleWake = useCallback(async () => {
-    setStatus("listening");
-    await runMicLevelLoop();
-    try {
-      const heard = await listenOnce({ timeoutMs: 4000 });
-      stopMicLevelLoop();
-      if (matchesWakePhrase(heard)) {
-        await handleCommand();
-        return;
-      }
-    } catch {
-      // no phrase heard in time
-    }
-    stopMicLevelLoop();
-    setStatus("idle");
-  }, [runMicLevelLoop, stopMicLevelLoop, handleCommand]);
-
-  // Clap-to-wake only runs while armed and idle — paused during
-  // listening/speaking so JARVIS's own audio can't retrigger it.
+  // Two independent ways to wake up: a double-clap, or just saying the
+  // phrase — both jump straight into listening for the actual command.
+  // Both only run while armed and idle, paused during listening/speaking
+  // so JARVIS's own audio can't retrigger them.
   useEffect(() => {
-    if (status === "idle") {
-      stopClapDetectorRef.current = startClapDetector({
-        onDoubleClap: handleWake,
-        // Also drives the visible level meter/sphere while armed, so
-        // there's live feedback for calibrating claps against a real room.
-        onLevel: setLevel,
-      });
-    } else {
+    if (status !== "idle") {
       stopClapDetectorRef.current?.();
       stopClapDetectorRef.current = null;
+      stopWakeListenerRef.current?.();
+      stopWakeListenerRef.current = null;
+      return;
     }
+
+    stopClapDetectorRef.current = startClapDetector({
+      onDoubleClap: handleCommand,
+      // Also drives the visible level meter/sphere while armed, so
+      // there's live feedback for calibrating claps against a real room.
+      onLevel: setLevel,
+    });
+    stopWakeListenerRef.current = startContinuousListening((transcript) => {
+      if (matchesWakePhrase(transcript)) handleCommand();
+    });
+
     return () => {
       stopClapDetectorRef.current?.();
       stopClapDetectorRef.current = null;
+      stopWakeListenerRef.current?.();
+      stopWakeListenerRef.current = null;
     };
-  }, [status, handleWake]);
+  }, [status, handleCommand]);
 
   const activate = useCallback(async () => {
     if (status !== "inactive") return;

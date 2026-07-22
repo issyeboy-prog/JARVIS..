@@ -8,12 +8,8 @@ import NotificationsPanel from "@/components/NotificationsPanel";
 import SystemStatusPanel from "@/components/SystemStatusPanel";
 import NotesPanel from "@/components/NotesPanel";
 import NewsPanel from "@/components/NewsPanel";
-import VoiceControl from "@/components/VoiceControl";
-import { useVoice } from "@/contexts/VoiceContext";
 
 export default function Home() {
-  const { level, status } = useVoice();
-
   return (
     <div className="flex-1 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-1 pb-4 text-[11px] uppercase tracking-[0.4em] text-cyan-400/50">
@@ -39,7 +35,7 @@ export default function Home() {
         </div>
 
         <div className="relative order-first min-h-[420px] lg:order-none lg:col-start-2 lg:row-span-3 lg:row-start-1">
-          <Nebula level={level} status={status} />
+          <Nebula />
         </div>
 
         <div className="glass-panel holo-panel lg:col-start-1 lg:row-start-2" style={{ "--holo-delay": "2s" } as React.CSSProperties}>
@@ -58,10 +54,6 @@ export default function Home() {
 
         <div className="glass-panel holo-panel min-h-[220px] lg:col-span-3" style={{ "--holo-delay": "6s" } as React.CSSProperties}>
           <NewsPanel />
-        </div>
-
-        <div className="glass-panel holo-panel lg:col-span-3">
-          <VoiceControl />
         </div>
       </div>
     </div>

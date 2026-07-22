@@ -78,3 +78,52 @@ export function matchesWakePhrase(transcript: string): boolean {
   const required = ["wake", "home"];
   return required.every((word) => t.includes(word));
 }
+
+// Keeps a SpeechRecognition session running in the background so the wake
+// phrase alone (no clap needed) can trigger wake-up. Browsers periodically
+// end a "continuous" session on their own (mobile Chrome especially), so
+// this auto-restarts until explicitly stopped. Note: this means audio
+// streams continuously to the browser's speech-recognition service the
+// entire time it's running, not just in short bursts.
+export function startContinuousListening(
+  onTranscript: (transcript: string) => void
+): () => void {
+  const Ctor = getRecognitionCtor();
+  if (!Ctor) return () => {};
+
+  let stopped = false;
+  let recognition: SpeechRecognitionLike | null = null;
+
+  const start = () => {
+    if (stopped) return;
+    recognition = new Ctor();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+
+    recognition.onresult = (ev) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const result = ev.results[i];
+        if (result.isFinal) onTranscript(result[0].transcript);
+      }
+    };
+    recognition.onend = () => {
+      if (!stopped) start(); // browsers end continuous sessions periodically
+    };
+    recognition.onerror = () => {
+      // 'no-speech' etc. — onend fires right after, which restarts it
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      // e.g. already running — the onend/restart loop will recover
+    }
+  };
+  start();
+
+  return () => {
+    stopped = true;
+    recognition?.stop();
+  };
+}

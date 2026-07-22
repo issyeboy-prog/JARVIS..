@@ -16,17 +16,26 @@ export interface HandGestureHandle {
   stop: () => void;
 }
 
+export interface HandPoint {
+  x: number;
+  y: number;
+}
+
 export interface HandGestureCallbacks {
-  // cx, cy: normalized 0..1 palm position, mirrored to match what the
-  // user sees of themselves.
-  onPosition: (cx: number, cy: number) => void;
-  onFist: () => void; // fires once per fresh Closed_Fist detection
+  // Keyed by MediaPipe's handedness label so a hand keeps its identity
+  // across frames (and across hands entering/leaving frame) rather than
+  // jumping around by array index. Positions are smoothed (EMA) here, not
+  // raw per-frame landmarks, to cut down on jitter.
+  onHands: (hands: { left: HandPoint | null; right: HandPoint | null }) => void;
+  onFist: () => void; // fires once per fresh Closed_Fist detection, either hand
 }
 
 const WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task";
+
+const SMOOTHING = 0.4; // higher = snappier/less smooth, lower = smoother/more lag
 
 let recognizerPromise: Promise<GestureRecognizer> | null = null;
 
@@ -37,16 +46,24 @@ function getRecognizer(): Promise<GestureRecognizer> {
       return GestureRecognizer.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
         runningMode: "VIDEO",
-        numHands: 1,
+        numHands: 2,
       });
     })();
   }
   return recognizerPromise;
 }
 
+function smooth(prev: HandPoint | null, next: HandPoint): HandPoint {
+  if (!prev) return next;
+  return {
+    x: prev.x + (next.x - prev.x) * SMOOTHING,
+    y: prev.y + (next.y - prev.y) * SMOOTHING,
+  };
+}
+
 export async function startHandGestures(
   videoEl: HTMLVideoElement,
-  { onPosition, onFist }: HandGestureCallbacks
+  { onHands, onFist }: HandGestureCallbacks
 ): Promise<HandGestureHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
@@ -58,20 +75,32 @@ export async function startHandGestures(
   let stopped = false;
   let raf = 0;
   let wasFist = false;
+  let smoothedLeft: HandPoint | null = null;
+  let smoothedRight: HandPoint | null = null;
 
   const tick = () => {
     if (stopped) return;
     if (videoEl.readyState >= 2) {
       const result = recognizer.recognizeForVideo(videoEl, performance.now());
 
-      if (result.landmarks.length > 0) {
-        // Landmark 0 is the wrist — stable enough as a palm-position proxy.
-        const wrist = result.landmarks[0][0];
-        onPosition(1 - wrist.x, wrist.y); // mirror x for the front camera
-      }
+      let rawLeft: HandPoint | null = null;
+      let rawRight: HandPoint | null = null;
+      result.handedness.forEach((categories, i) => {
+        const label = categories[0]?.categoryName;
+        const wrist = result.landmarks[i]?.[0];
+        if (!wrist) return;
+        const point: HandPoint = { x: 1 - wrist.x, y: wrist.y }; // mirror for front camera
+        if (label === "Left") rawLeft = point;
+        else if (label === "Right") rawRight = point;
+      });
 
-      const top = result.gestures[0]?.[0];
-      const isFist = !!top && top.categoryName === "Closed_Fist" && top.score > 0.6;
+      smoothedLeft = rawLeft ? smooth(smoothedLeft, rawLeft) : null;
+      smoothedRight = rawRight ? smooth(smoothedRight, rawRight) : null;
+      onHands({ left: smoothedLeft, right: smoothedRight });
+
+      const isFist = result.gestures.some(
+        (g) => g[0]?.categoryName === "Closed_Fist" && g[0].score > 0.6
+      );
       if (isFist && !wasFist) onFist();
       wasFist = isFist;
     }

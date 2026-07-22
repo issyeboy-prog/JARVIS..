@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { VoiceStatus } from "@/contexts/VoiceContext";
-import { startHandGestures, type HandGestureHandle } from "@/lib/handGestures";
-
-interface NebulaProps {
-  level: number; // 0..1, smoothed audio amplitude (mic or TTS playback)
-  status: VoiceStatus;
-}
+import { useVoice } from "@/contexts/VoiceContext";
+import {
+  startHandGestures,
+  type HandGestureHandle,
+  type HandPoint,
+} from "@/lib/handGestures";
 
 interface Star {
   x: number; // unit-sphere object-space coords, fixed at generation
@@ -18,6 +17,8 @@ interface Star {
   size: number;
   twinklePhase: number;
   twinkleSpeed: number;
+  cluster: 0 | 1; // which half this star belongs to when split
+  noiseSeed: number;
 }
 
 const STAR_COUNT = 650;
@@ -39,6 +40,8 @@ function buildStars(): Star[] {
       size: 0.6 + Math.random() * 1.8,
       twinklePhase: Math.random() * Math.PI * 2,
       twinkleSpeed: 0.6 + Math.random() * 2,
+      cluster: Math.random() < 0.5 ? 0 : 1,
+      noiseSeed: Math.random() * 1000,
     });
   }
   return stars;
@@ -46,7 +49,8 @@ function buildStars(): Star[] {
 
 type HandStatus = "off" | "starting" | "active" | "error";
 
-export default function Nebula({ level, status }: NebulaProps) {
+export default function Nebula() {
+  const { level, status, activate, talkNow } = useVoice();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const levelRef = useRef(level);
@@ -55,7 +59,6 @@ export default function Nebula({ level, status }: NebulaProps) {
   const starsRef = useRef(stars);
 
   const [handStatus, setHandStatus] = useState<HandStatus>("off");
-  const handStatusRef = useRef<HandStatus>("off");
   const trackerRef = useRef<HandGestureHandle | null>(null);
 
   // Rotation + drag-follow state, mutated straight from the animation and
@@ -65,10 +68,17 @@ export default function Nebula({ level, status }: NebulaProps) {
   const angularVelocityRef = useRef({ x: 0, y: 0 });
   const currentOffsetRef = useRef({ x: 0, y: 0 });
   const targetOffsetRef = useRef({ x: 0, y: 0 });
-  const lastHandPosRef = useRef<{ x: number; y: number } | null>(null);
+  const lastDrivePosRef = useRef<HandPoint | null>(null);
   // Decays back to 0 each frame — a fist-close briefly spikes this to
   // drive the shockwave/bounce effect.
   const bounceRef = useRef(0);
+  // Latest smoothed hand positions and the split amount eased toward 1
+  // when both hands are present, 0 otherwise.
+  const handsRef = useRef<{ left: HandPoint | null; right: HandPoint | null }>({
+    left: null,
+    right: null,
+  });
+  const splitRef = useRef(0);
 
   useEffect(() => {
     levelRef.current = level;
@@ -76,11 +86,9 @@ export default function Nebula({ level, status }: NebulaProps) {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
-  useEffect(() => {
-    handStatusRef.current = handStatus;
-  }, [handStatus]);
 
-  const toggleHandTracking = async () => {
+  const toggleHandTracking = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (trackerRef.current) {
       trackerRef.current.stop();
       trackerRef.current = null;
@@ -97,19 +105,33 @@ export default function Nebula({ level, status }: NebulaProps) {
       // after the hand stops rather than snapping dead.
       const MOMENTUM_SENSITIVITY = 9;
       const MAX_ANGULAR_VELOCITY = 10;
-      lastHandPosRef.current = null;
+      lastDrivePosRef.current = null;
 
       trackerRef.current = await startHandGestures(video, {
-        onPosition: (cx, cy) => {
+        onHands: (hands) => {
+          handsRef.current = hands;
+
+          const drive =
+            hands.left && hands.right
+              ? {
+                  x: (hands.left.x + hands.right.x) / 2,
+                  y: (hands.left.y + hands.right.y) / 2,
+                }
+              : hands.left ?? hands.right;
+          if (!drive) {
+            lastDrivePosRef.current = null;
+            return;
+          }
+
           targetOffsetRef.current = {
-            x: Math.max(-1, Math.min(1, (cx - 0.5) * 2)),
-            y: Math.max(-1, Math.min(1, (cy - 0.5) * 2)),
+            x: Math.max(-1, Math.min(1, (drive.x - 0.5) * 2)),
+            y: Math.max(-1, Math.min(1, (drive.y - 0.5) * 2)),
           };
 
-          const last = lastHandPosRef.current;
+          const last = lastDrivePosRef.current;
           if (last) {
-            const dx = cx - last.x;
-            const dy = cy - last.y;
+            const dx = drive.x - last.x;
+            const dy = drive.y - last.y;
             rotationRef.current.y += dx * DRAG_SENSITIVITY;
             rotationRef.current.x += dy * DRAG_SENSITIVITY;
             angularVelocityRef.current.y = Math.max(
@@ -127,7 +149,7 @@ export default function Nebula({ level, status }: NebulaProps) {
               )
             );
           }
-          lastHandPosRef.current = { x: cx, y: cy };
+          lastDrivePosRef.current = drive;
         },
         onFist: () => {
           bounceRef.current = 1;
@@ -170,27 +192,49 @@ export default function Nebula({ level, status }: NebulaProps) {
       last = now;
       const w = canvas.width;
       const h = canvas.height;
-      const scale = Math.min(w, h) * 0.42;
+      const baseScale = Math.min(w, h) * 0.42;
       const lvl = levelRef.current;
 
-      // Constant slow ambient spin, plus whatever hand-drag momentum is
-      // active. Friction decays the drag momentum back toward the ambient
-      // spin, giving a coast-to-rest "flicked trackball" feel.
+      // Liquid "breathing" — a slow ambient pulsation independent of audio,
+      // so the whole thing never sits perfectly still even in silence.
+      const breathe = 1 + Math.sin(now * 0.0006) * 0.035;
+      const scale = baseScale * breathe;
+
       const FRICTION = 0.92;
       angularVelocityRef.current.x *= FRICTION;
       angularVelocityRef.current.y *= FRICTION;
       rotationRef.current.y += (0.12 + angularVelocityRef.current.y) * dt;
       rotationRef.current.x += angularVelocityRef.current.x * dt;
 
-      // Snappy follow — the whole sphere visibly tracks the hand's
-      // position, not just a subtle nudge.
       currentOffsetRef.current.x +=
         (targetOffsetRef.current.x - currentOffsetRef.current.x) * 0.22;
       currentOffsetRef.current.y +=
         (targetOffsetRef.current.y - currentOffsetRef.current.y) * 0.22;
 
-      const cx = w / 2 + currentOffsetRef.current.x * w * 0.32;
-      const cy = h / 2 + currentOffsetRef.current.y * h * 0.32;
+      const mergedCx = w / 2 + currentOffsetRef.current.x * w * 0.32;
+      const mergedCy = h / 2 + currentOffsetRef.current.y * h * 0.32;
+
+      // Ease the split amount toward 1 when both hands are present.
+      const bothHands = !!(handsRef.current.left && handsRef.current.right);
+      splitRef.current += ((bothHands ? 1 : 0) - splitRef.current) * 0.08;
+      const split = splitRef.current;
+
+      const leftScreen = handsRef.current.left
+        ? { x: handsRef.current.left.x * w, y: handsRef.current.left.y * h }
+        : { x: mergedCx, y: mergedCy };
+      const rightScreen = handsRef.current.right
+        ? { x: handsRef.current.right.x * w, y: handsRef.current.right.y * h }
+        : { x: mergedCx, y: mergedCy };
+
+      const centerA = {
+        x: mergedCx + (leftScreen.x - mergedCx) * split,
+        y: mergedCy + (leftScreen.y - mergedCy) * split,
+      };
+      const centerB = {
+        x: mergedCx + (rightScreen.x - mergedCx) * split,
+        y: mergedCy + (rightScreen.y - mergedCy) * split,
+      };
+      const clusterScale = scale * (1 - split * 0.45);
 
       // Fist-close shockwave: spikes to 1 in the tracker callback, decays
       // back out over the next ~15-20 frames.
@@ -204,27 +248,30 @@ export default function Nebula({ level, status }: NebulaProps) {
       const cosX = Math.cos(rotationRef.current.x);
       const sinX = Math.sin(rotationRef.current.x);
 
-      // Ambient glow behind the whole sphere — flashes brighter/wider on
-      // a fist-close bounce
-      const glowRadius = scale * (1.15 + bounce * 0.35);
-      const glow = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, glowRadius);
-      glow.addColorStop(0, `rgba(250, 204, 21, ${0.16 + lvl * 0.14 + bounce * 0.3})`);
-      glow.addColorStop(1, "rgba(250, 204, 21, 0)");
-      ctx2d.fillStyle = glow;
-      ctx2d.beginPath();
-      ctx2d.arc(cx, cy, glowRadius, 0, Math.PI * 2);
-      ctx2d.fill();
-
-      // Thin holographic equator rings, tilted with the sphere's rotation
-      for (let i = 0; i < 2; i++) {
-        const tilt = 0.28 + i * 0.4;
-        const ringRy = Math.abs(Math.sin(rotationRef.current.x + tilt)) * scale * 0.9 + scale * 0.15;
+      const drawGlowAndRings = (cx: number, cy: number, sc: number) => {
+        const glowRadius = sc * (1.15 + bounce * 0.35);
+        const glow = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, glowRadius);
+        glow.addColorStop(0, `rgba(250, 204, 21, ${0.16 + lvl * 0.14 + bounce * 0.3})`);
+        glow.addColorStop(1, "rgba(250, 204, 21, 0)");
+        ctx2d.fillStyle = glow;
         ctx2d.beginPath();
-        ctx2d.ellipse(cx, cy, scale * (1.05 + i * 0.12), ringRy * 0.28, 0, 0, Math.PI * 2);
-        ctx2d.strokeStyle = `rgba(56, 189, 248, ${0.22 + lvl * 0.25 - i * 0.06})`;
-        ctx2d.lineWidth = 1 * dpr;
-        ctx2d.stroke();
-      }
+        ctx2d.arc(cx, cy, glowRadius, 0, Math.PI * 2);
+        ctx2d.fill();
+
+        for (let i = 0; i < 2; i++) {
+          const tilt = 0.28 + i * 0.4;
+          const ringRy =
+            Math.abs(Math.sin(rotationRef.current.x + tilt)) * sc * 0.9 + sc * 0.15;
+          ctx2d.beginPath();
+          ctx2d.ellipse(cx, cy, sc * (1.05 + i * 0.12), ringRy * 0.28, 0, 0, Math.PI * 2);
+          ctx2d.strokeStyle = `rgba(56, 189, 248, ${0.22 + lvl * 0.25 - i * 0.06})`;
+          ctx2d.lineWidth = 1 * dpr;
+          ctx2d.stroke();
+        }
+      };
+
+      drawGlowAndRings(centerA.x, centerA.y, clusterScale);
+      if (split > 0.03) drawGlowAndRings(centerB.x, centerB.y, clusterScale);
 
       // Depth-sort stars back-to-front so nearer ones draw over farther ones
       const projected = starsRef.current.map((s) => {
@@ -238,11 +285,21 @@ export default function Nebula({ level, status }: NebulaProps) {
 
       for (const { s, x1, y1, z2 } of projected) {
         const depth = (z2 + 1.15) / 2.15; // ~0.07..1
-        // Bounce pushes stars radially outward in a shockwave, then they
-        // settle back as it decays.
         const react = 1 + lvl * 0.5 + bounce * 0.8;
-        const px = cx + x1 * scale * react;
-        const py = cy + y1 * scale * react;
+
+        // Liquid wobble — cheap per-star pseudo-noise so the cluster
+        // ripples organically instead of moving as one rigid body.
+        const t = now * 0.0009;
+        const wobbleX = Math.sin(t + s.noiseSeed) * 0.035;
+        const wobbleY = Math.cos(t * 1.3 + s.noiseSeed * 1.7) * 0.035;
+
+        // centerA/centerB already smoothly interpolate from the shared
+        // merged center (split=0) out to each hand's position (split=1),
+        // so stars ease apart continuously rather than snapping.
+        const { x: cx, y: cy } = s.cluster === 0 ? centerA : centerB;
+
+        const px = cx + (x1 + wobbleX) * clusterScale * react;
+        const py = cy + (y1 + wobbleY) * clusterScale * react;
         const twinkle =
           0.55 + 0.45 * Math.sin(s.twinklePhase + now * 0.001 * s.twinkleSpeed);
         const alpha = (0.2 + depth * 0.8) * (0.6 + twinkle * 0.4 + lvl * 0.2 + bounce * 0.3);
@@ -254,15 +311,19 @@ export default function Nebula({ level, status }: NebulaProps) {
         ctx2d.fill();
       }
 
-      // Bright core
-      const coreR = scale * (0.1 + lvl * 0.06 + bounce * 0.08);
-      const coreGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, coreR * 2.2);
-      coreGrad.addColorStop(0, `rgba(255, 250, 220, ${Math.min(0.85 + lvl * 0.15 + bounce * 0.2, 1)})`);
-      coreGrad.addColorStop(1, "rgba(255, 250, 220, 0)");
-      ctx2d.fillStyle = coreGrad;
-      ctx2d.beginPath();
-      ctx2d.arc(cx, cy, coreR * 2.2, 0, Math.PI * 2);
-      ctx2d.fill();
+      const drawCore = (cx: number, cy: number, sc: number) => {
+        const coreR = sc * (0.1 + lvl * 0.06 + bounce * 0.08);
+        const coreGrad = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, coreR * 2.2);
+        coreGrad.addColorStop(0, `rgba(255, 250, 220, ${Math.min(0.85 + lvl * 0.15 + bounce * 0.2, 1)})`);
+        coreGrad.addColorStop(1, "rgba(255, 250, 220, 0)");
+        ctx2d.fillStyle = coreGrad;
+        ctx2d.beginPath();
+        ctx2d.arc(cx, cy, coreR * 2.2, 0, Math.PI * 2);
+        ctx2d.fill();
+      };
+
+      drawCore(centerA.x, centerA.y, clusterScale);
+      if (split > 0.03) drawCore(centerB.x, centerB.y, clusterScale);
 
       raf = requestAnimationFrame(draw);
     };
@@ -282,10 +343,15 @@ export default function Nebula({ level, status }: NebulaProps) {
   };
 
   return (
-    <div className="relative h-full w-full">
+    <div
+      className="relative h-full w-full cursor-pointer"
+      onClick={() => (status === "inactive" ? activate() : talkNow())}
+      role="button"
+      aria-label={status === "inactive" ? "Activate JARVIS" : "Talk to JARVIS"}
+    >
       <canvas ref={canvasRef} className="h-full w-full" aria-hidden="true" />
       {/* Kept off-DOM-visible but not display:none, so mobile Chrome keeps
-          decoding frames for the motion-tracking canvas to read. */}
+          decoding frames for the tracking model to read. */}
       <video
         ref={videoRef}
         muted
