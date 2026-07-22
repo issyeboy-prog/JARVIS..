@@ -20,6 +20,7 @@ import {
 import { speak, type SpeakHandle, type TtsEngineReport } from "@/lib/tts";
 import { askAssistant } from "@/lib/assistant";
 import { buildBriefingContext } from "@/lib/briefingContext";
+import { resetAllPanels } from "@/lib/panelReset";
 
 export type VoiceStatus =
   | "inactive" // mic not yet granted, clap-to-wake off
@@ -62,6 +63,11 @@ const RECOGNIZER_HANDOFF_MS = 200;
 // that happens to contain the word (e.g. "don't stop the music").
 const STOP_PHRASE_RE =
   /^(stop( talking)?|(be )?quiet|silence|that'?s (enough|all)|never ?mind|cancel|shut up)[.!]?$/i;
+
+// Handled locally instead of round-tripping to the assistant — it's a
+// direct action on the panels, not a question, and this way it still
+// works even before an ANTHROPIC_API_KEY is configured.
+const RESET_DISPLAY_RE = /\breset (?:the )?(?:display|panels?|layout|boxes|screen)\b/i;
 
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<VoiceStatus>("inactive");
@@ -120,6 +126,30 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setMicLevel(0);
   }, []);
 
+  // Speaks a reply and captures the handle so a later "Jarvis"/"stop" can
+  // interrupt it. Shared by the real assistant path and any locally
+  // handled command (e.g. "reset display") that skips the network call.
+  const speakReply = useCallback((reply: string) => {
+    setLastResponse(reply);
+    setStatus("speaking");
+    return new Promise<void>((resolve) => {
+      let ended = false;
+      speak(reply, {
+        onLevel: setTtsLevel,
+        onEnd: () => {
+          ended = true;
+          speakHandleRef.current = null;
+          resolve();
+        },
+        onEngine: setLastTtsEngine,
+      }).then((handle) => {
+        // onEnd can fire before this resolves (very short replies) —
+        // don't resurrect a handle for playback that's already done.
+        if (!ended) speakHandleRef.current = handle;
+      });
+    });
+  }, []);
+
   // preHeard: command text already captured as part of the wake utterance
   // itself (e.g. "Jarvis, what's the weather"). When present, skips
   // straight to answering instead of opening a second listening round.
@@ -160,31 +190,22 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       stopMicLevelLoop();
       setStatus("thinking");
 
-      // Live data (schedule, weather, news, date/time, quote/word) so
-      // JARVIS can actually answer "give me a daily briefing" — or any
-      // question touching this stuff — with real specifics instead of
-      // guessing. Cheap fields resolve instantly; weather/news have a
-      // short timeout and are just omitted if they don't come back in time.
-      const context = await buildBriefingContext();
-      const reply = await askAssistant(heard, context);
-      setLastResponse(reply);
-      setStatus("speaking");
-      await new Promise<void>((resolve) => {
-        let ended = false;
-        speak(reply, {
-          onLevel: setTtsLevel,
-          onEnd: () => {
-            ended = true;
-            speakHandleRef.current = null;
-            resolve();
-          },
-          onEngine: setLastTtsEngine,
-        }).then((handle) => {
-          // onEnd can fire before this resolves (very short replies) —
-          // don't resurrect a handle for playback that's already done.
-          if (!ended) speakHandleRef.current = handle;
-        });
-      });
+      if (RESET_DISPLAY_RE.test(heard)) {
+        // A direct action on the panels, not a question — handled locally
+        // so it works instantly and even without an assistant configured.
+        resetAllPanels();
+        await speakReply("Display reset.");
+      } else {
+        // Live data (schedule, weather, news, date/time, quote/word) so
+        // JARVIS can actually answer "give me a daily briefing" — or any
+        // question touching this stuff — with real specifics instead of
+        // guessing. Cheap fields resolve instantly; weather/news have a
+        // short timeout and are just omitted if they don't come back in
+        // time.
+        const context = await buildBriefingContext();
+        const reply = await askAssistant(heard, context);
+        await speakReply(reply);
+      }
     } catch (err) {
       // Previously silent — status would just flicker back to idle with
       // zero visible feedback, indistinguishable from "nothing happened."
@@ -214,7 +235,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         setStatus("idle");
       }
     }
-  }, [runMicLevelLoop, stopMicLevelLoop]);
+  }, [runMicLevelLoop, stopMicLevelLoop, speakReply]);
 
   // Cuts off whatever JARVIS is currently saying. Safe to call when
   // nothing is playing (no-op).
