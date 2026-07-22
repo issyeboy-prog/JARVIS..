@@ -95,7 +95,10 @@ function WaveformStrip({ level, color, label }: WaveformStripProps) {
 }
 
 export default function WaveformPanel() {
-  const { micLevel, ttsLevel } = useVoice();
+  const { micLevel, ttsLevel, status } = useVoice();
+  // Wake word ("Jarvis") flips status out of idle immediately — green from
+  // that instant through listening/thinking/speaking, back to gold at rest.
+  const jarvisActive = status === "listening" || status === "thinking" || status === "speaking";
 
   return (
     <div className="flex flex-col gap-3">
@@ -103,7 +106,11 @@ export default function WaveformPanel() {
         Voice Activity
       </h2>
       <WaveformStrip level={micLevel} color="#22d3ee" label="You" />
-      <WaveformStrip level={ttsLevel} color="#facc15" label="Jarvis" />
+      <WaveformStrip
+        level={ttsLevel}
+        color={jarvisActive ? "#4ade80" : "#facc15"}
+        label="Jarvis"
+      />
     </div>
   );
 }

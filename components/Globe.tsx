@@ -216,7 +216,8 @@ const STATUS_LABEL: Record<VoiceStatus, string> = {
 type HandStatus = "off" | "starting" | "active" | "error";
 
 export default function Globe() {
-  const { micLevel, ttsLevel, status, activate, talkNow } = useVoice();
+  const { micLevel, ttsLevel, status, transcript, lastResponse, activate, talkNow } =
+    useVoice();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const levelRef = useRef(0);
@@ -403,6 +404,15 @@ export default function Globe() {
     error: "Camera unavailable",
   };
 
+  // Subtitles: what you said (once captured, during thinking) or what
+  // JARVIS is saying (while speaking) — never both at once.
+  const subtitle =
+    status === "speaking" && lastResponse
+      ? { text: lastResponse, color: "text-emerald-300" }
+      : status === "thinking" && transcript
+        ? { text: `"${transcript}"`, color: "text-cyan-200" }
+        : null;
+
   return (
     <div
       className="relative h-full w-full cursor-pointer"
@@ -420,6 +430,15 @@ export default function Globe() {
       <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[11px] uppercase tracking-[0.3em] text-cyan-300/70 holo-text">
         {STATUS_LABEL[status]}
       </div>
+      {subtitle && (
+        <div className="pointer-events-none absolute bottom-14 left-1/2 w-[85%] max-w-md -translate-x-1/2 text-center">
+          <p
+            className={`rounded-md bg-black/40 px-3 py-1.5 text-sm backdrop-blur-sm ${subtitle.color}`}
+          >
+            {subtitle.text}
+          </p>
+        </div>
+      )}
       <button
         onClick={toggleHandTracking}
         disabled={handStatus === "starting"}
