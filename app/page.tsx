@@ -10,6 +10,7 @@ import NotesPanel from "@/components/NotesPanel";
 import NewsPanel from "@/components/NewsPanel";
 import WaveformPanel from "@/components/WaveformPanel";
 import DailyPanel from "@/components/DailyPanel";
+import Draggable from "@/components/Draggable";
 
 export default function Home() {
   return (
@@ -33,31 +34,32 @@ export default function Home() {
         </div>
 
         <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[280px_1fr_280px] lg:grid-rows-[auto_auto_auto]">
-          <div className="glass-panel holo-panel lg:col-start-1 lg:row-start-1" style={{ "--holo-delay": "0s" } as React.CSSProperties}>
+          <Draggable id="clock" className="glass-panel holo-panel lg:col-start-1 lg:row-start-1" style={{ "--holo-delay": "0s" } as React.CSSProperties}>
             <Clock />
-          </div>
-          <div className="glass-panel holo-panel lg:col-start-3 lg:row-start-1" style={{ "--holo-delay": "1s" } as React.CSSProperties}>
+          </Draggable>
+          <Draggable id="weather" className="glass-panel holo-panel lg:col-start-3 lg:row-start-1" style={{ "--holo-delay": "1s" } as React.CSSProperties}>
             <WeatherPanel />
-          </div>
+          </Draggable>
 
-          <div className="glass-panel holo-panel lg:col-start-1 lg:row-start-2" style={{ "--holo-delay": "2s" } as React.CSSProperties}>
+          <Draggable id="schedule" className="glass-panel holo-panel lg:col-start-1 lg:row-start-2" style={{ "--holo-delay": "2s" } as React.CSSProperties}>
             <SchedulePanel />
-          </div>
-          <div className="glass-panel holo-panel lg:col-start-3 lg:row-start-2" style={{ "--holo-delay": "3s" } as React.CSSProperties}>
+          </Draggable>
+          <Draggable id="notifications" className="glass-panel holo-panel lg:col-start-3 lg:row-start-2" style={{ "--holo-delay": "3s" } as React.CSSProperties}>
             <NotificationsPanel />
-          </div>
+          </Draggable>
 
-          <div className="glass-panel holo-panel lg:col-start-1 lg:row-start-3" style={{ "--holo-delay": "4s" } as React.CSSProperties}>
+          <Draggable id="notes" className="glass-panel holo-panel lg:col-start-1 lg:row-start-3" style={{ "--holo-delay": "4s" } as React.CSSProperties}>
             <NotesPanel />
-          </div>
-          <div className="glass-panel holo-panel lg:col-start-3 lg:row-start-3" style={{ "--holo-delay": "5s" } as React.CSSProperties}>
+          </Draggable>
+          <Draggable id="system" className="glass-panel holo-panel lg:col-start-3 lg:row-start-3" style={{ "--holo-delay": "5s" } as React.CSSProperties}>
             <SystemStatusPanel />
-          </div>
+          </Draggable>
 
-          <div className="glass-panel holo-panel lg:col-start-1" style={{ "--holo-delay": "6.5s" } as React.CSSProperties}>
+          <Draggable id="daily" className="glass-panel holo-panel lg:col-start-1" style={{ "--holo-delay": "6.5s" } as React.CSSProperties}>
             <DailyPanel />
-          </div>
+          </Draggable>
 
+          {/* Deliberately not draggable, per request. */}
           <div className="glass-panel holo-panel lg:col-span-3" style={{ "--holo-delay": "6s" } as React.CSSProperties}>
             <WaveformPanel />
           </div>

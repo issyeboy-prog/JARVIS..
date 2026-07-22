@@ -1,19 +1,7 @@
-// Shared between the UI panels (SchedulePanel, DailyPanel) and the voice
-// assistant's briefing context, so both read from one source of truth.
-
-export interface ScheduleEvent {
-  id: string;
-  time: string;
-  title: string;
-}
-
-// Mock data for now — shaped so a real Google Calendar fetch can drop in
-// later without touching callers.
-export const MOCK_EVENTS: ScheduleEvent[] = [
-  { id: "1", time: "09:00", title: "Standup" },
-  { id: "2", time: "13:30", title: "Design review" },
-  { id: "3", time: "18:00", title: "Gym" },
-];
+// Shared between the UI panels (DailyPanel) and the voice assistant's
+// briefing context, so both read from one source of truth. Schedule data
+// lives separately in lib/scheduleStore.ts since — unlike quotes/words —
+// it's mutable (JARVIS can add/remove events) and needs to persist.
 
 export interface Quote {
   text: string;

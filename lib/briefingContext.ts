@@ -1,6 +1,7 @@
 "use client";
 
-import { MOCK_EVENTS, getTodaysQuote, getTodaysWord } from "./dailyContent";
+import { getTodaysQuote, getTodaysWord } from "./dailyContent";
+import { readSchedule } from "./scheduleStore";
 
 // Gathers everything JARVIS needs to answer things like "give me a daily
 // briefing" with real data instead of guessing. Sent alongside every voice
@@ -87,6 +88,7 @@ export async function buildBriefingContext(): Promise<string> {
   const [weatherLine, newsLines] = await Promise.all([getWeatherLine(), getNewsLines()]);
   const quote = getTodaysQuote();
   const word = getTodaysWord();
+  const events = readSchedule();
 
   const lines = [
     `Current date: ${now.toLocaleDateString([], {
@@ -98,8 +100,8 @@ export async function buildBriefingContext(): Promise<string> {
     `Current time: ${now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
     `Weather: ${weatherLine ?? "unavailable"}`,
     `Today's schedule: ${
-      MOCK_EVENTS.length
-        ? MOCK_EVENTS.map((e) => `${e.time} ${e.title}`).join("; ")
+      events.length
+        ? events.map((e) => `${e.time} ${e.title}`).join("; ")
         : "nothing scheduled"
     }`,
     `Top news headlines: ${newsLines.length ? newsLines.join(" | ") : "unavailable"}`,
