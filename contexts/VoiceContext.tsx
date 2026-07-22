@@ -17,7 +17,7 @@ import {
   listenOnce,
   startContinuousListening,
 } from "@/lib/speechRecognition";
-import { speak, type TtsEngineReport } from "@/lib/tts";
+import { speak, type SpeakHandle, type TtsEngineReport } from "@/lib/tts";
 import { askAssistant } from "@/lib/assistant";
 import { buildBriefingContext } from "@/lib/briefingContext";
 
@@ -56,6 +56,13 @@ function noopSubscribe() {
 // is still tearing down is a common source of silently-failing listens.
 const RECOGNIZER_HANDOFF_MS = 200;
 
+// A whole utterance matching one of these (nothing else said) cuts JARVIS
+// off mid-sentence instead of being treated as a question for the
+// assistant. Anchored so it only fires on a clean "stop", not a sentence
+// that happens to contain the word (e.g. "don't stop the music").
+const STOP_PHRASE_RE =
+  /^(stop( talking)?|(be )?quiet|silence|that'?s (enough|all)|never ?mind|cancel|shut up)[.!]?$/i;
+
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<VoiceStatus>("inactive");
   const [micLevel, setMicLevel] = useState(0);
@@ -68,6 +75,14 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const stopClapDetectorRef = useRef<(() => void) | null>(null);
   const stopLevelLoopRef = useRef<(() => void) | null>(null);
   const stopWakeListenerRef = useRef<(() => void) | null>(null);
+  // The in-flight TTS playback handle, so a "Jarvis, stop" heard mid-
+  // sentence can cut it off — only set while status is "speaking".
+  const speakHandleRef = useRef<SpeakHandle | null>(null);
+  // Set right before an interrupt cancels playback, so handleCommand's own
+  // finally block (still suspended on the now-resolving speak promise)
+  // knows not to stomp the status a second handleCommand call is already
+  // setting — see cancelSpeaking/handleWakeDuringSpeech below.
+  const interruptingRef = useRef(false);
   // Feature detection differs between server (no `window`) and client, so
   // this needs the getServerSnapshot escape hatch rather than plain state
   // — it keeps the very first client render matching the server's.
@@ -155,10 +170,19 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       setLastResponse(reply);
       setStatus("speaking");
       await new Promise<void>((resolve) => {
+        let ended = false;
         speak(reply, {
           onLevel: setTtsLevel,
-          onEnd: resolve,
+          onEnd: () => {
+            ended = true;
+            speakHandleRef.current = null;
+            resolve();
+          },
           onEngine: setLastTtsEngine,
+        }).then((handle) => {
+          // onEnd can fire before this resolves (very short replies) —
+          // don't resurrect a handle for playback that's already done.
+          if (!ended) speakHandleRef.current = handle;
         });
       });
     } catch (err) {
@@ -179,18 +203,61 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     } finally {
       stopMicLevelLoop();
       setTtsLevel(0);
-      setStatus("idle");
+      // If this call's speech was cut off by an interrupt, whoever
+      // triggered it already owns the status transition (either straight
+      // to idle, or into a fresh handleCommand of its own) — setting idle
+      // here too would race it and can clobber "listening" right back to
+      // "idle" a beat later.
+      if (interruptingRef.current) {
+        interruptingRef.current = false;
+      } else {
+        setStatus("idle");
+      }
     }
   }, [runMicLevelLoop, stopMicLevelLoop]);
+
+  // Cuts off whatever JARVIS is currently saying. Safe to call when
+  // nothing is playing (no-op).
+  const cancelSpeaking = useCallback(() => {
+    if (!speakHandleRef.current) return;
+    interruptingRef.current = true;
+    speakHandleRef.current.stop();
+    speakHandleRef.current = null;
+    setTtsLevel(0);
+  }, []);
+
+  // Called when the wake word is heard while JARVIS is mid-sentence.
+  // Saying "Jarvis" always takes priority over whatever he's doing —
+  // cuts him off, then either runs the new command straight away (if one
+  // was said in the same breath), opens a fresh listen (bare "Jarvis"),
+  // or — for an explicit stop phrase — just goes quiet.
+  const handleWakeDuringSpeech = useCallback(
+    (command: string) => {
+      const cmd = command.trim();
+      cancelSpeaking();
+      if (cmd && STOP_PHRASE_RE.test(cmd)) {
+        setStatus("idle");
+      } else {
+        handleCommand(cmd);
+      }
+    },
+    [cancelSpeaking, handleCommand]
+  );
 
   // Two independent ways to wake up: a double-clap (always opens a fresh
   // listen), or saying "Jarvis ..." / "wake up daddy's home ..." — the
   // wake-word and command can be one utterance, so the trailing text goes
   // straight to handleCommand instead of triggering a second listen.
-  // Both only run while armed and idle, paused during listening/speaking
-  // so JARVIS's own audio can't retrigger them.
+  // The clap detector only runs while idle (JARVIS's own audio would
+  // otherwise "clap" it via speaker bleed). The wake-word listener,
+  // though, also stays armed while *speaking* — that's what lets "Jarvis"
+  // (or a bare "stop") interrupt him mid-sentence instead of only working
+  // once he's done talking. Both are fully paused during listening/
+  // thinking, since a second recognizer racing the active one is exactly
+  // what used to cause "stuck on listening".
   useEffect(() => {
-    if (status !== "idle") {
+    const armed = status === "idle" || status === "speaking";
+    if (!armed) {
       stopClapDetectorRef.current?.();
       stopClapDetectorRef.current = null;
       stopWakeListenerRef.current?.();
@@ -198,13 +265,29 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    stopClapDetectorRef.current = startClapDetector({
-      onDoubleClap: () => handleCommand(),
-      // Also drives the visible level meter/sphere while armed, so
-      // there's live feedback for calibrating claps against a real room.
-      onLevel: setMicLevel,
-    });
+    if (status === "idle") {
+      stopClapDetectorRef.current = startClapDetector({
+        onDoubleClap: () => handleCommand(),
+        // Also drives the visible level meter/sphere while armed, so
+        // there's live feedback for calibrating claps against a real room.
+        onLevel: setMicLevel,
+      });
+    }
+
     stopWakeListenerRef.current = startContinuousListening((heard) => {
+      if (status === "speaking") {
+        // A bare "stop" (no wake word) only makes sense as an interrupt
+        // while he's actually talking — checked here rather than folded
+        // into extractCommand, which only recognizes wake-word utterances.
+        if (STOP_PHRASE_RE.test(heard.trim())) {
+          cancelSpeaking();
+          setStatus("idle");
+          return;
+        }
+        const command = extractCommand(heard);
+        if (command !== null) handleWakeDuringSpeech(command);
+        return;
+      }
       const command = extractCommand(heard);
       if (command !== null) handleCommand(command);
     });
@@ -215,7 +298,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       stopWakeListenerRef.current?.();
       stopWakeListenerRef.current = null;
     };
-  }, [status, handleCommand]);
+  }, [status, handleCommand, handleWakeDuringSpeech, cancelSpeaking]);
 
   const activate = useCallback(async () => {
     if (status !== "inactive") return;

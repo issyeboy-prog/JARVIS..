@@ -58,13 +58,20 @@ export async function speak(
         raf = requestAnimationFrame(tick);
       };
 
-      audioEl.addEventListener("ended", () => {
+      // Shared by natural completion and manual stop() so onEnd always
+      // fires exactly once either way — callers (like an interrupt
+      // triggered mid-sentence by the wake word) await onEnd to know
+      // playback has actually finished, not just that pause() was called.
+      const finish = () => {
+        if (stopped) return;
         stopped = true;
         cancelAnimationFrame(raf);
         URL.revokeObjectURL(url);
         onLevel?.(0);
         onEnd?.();
-      });
+      };
+
+      audioEl.addEventListener("ended", finish);
 
       await audioEl.play();
       onEngine?.({ engine: "elevenlabs" });
@@ -72,9 +79,8 @@ export async function speak(
 
       return {
         stop: () => {
-          stopped = true;
-          cancelAnimationFrame(raf);
           audioEl.pause();
+          finish();
         },
       };
     }
@@ -115,26 +121,24 @@ function speakWithBrowserVoice(
   utterance.onboundary = () => {
     pulse = 1;
   };
-  utterance.onend = () => {
+  // Shared by natural completion, error, and manual stop() so onEnd fires
+  // exactly once regardless of which path ends the utterance.
+  const finish = () => {
+    if (stopped) return;
     stopped = true;
     cancelAnimationFrame(raf);
     onLevel?.(0);
     onEnd?.();
   };
-  utterance.onerror = () => {
-    stopped = true;
-    cancelAnimationFrame(raf);
-    onLevel?.(0);
-    onEnd?.();
-  };
+  utterance.onend = finish;
+  utterance.onerror = finish;
 
   synth.speak(utterance);
 
   return {
     stop: () => {
-      stopped = true;
-      cancelAnimationFrame(raf);
       synth.cancel();
+      finish();
     },
   };
 }
