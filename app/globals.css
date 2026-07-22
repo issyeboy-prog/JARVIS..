@@ -37,6 +37,10 @@ body {
   box-shadow:
     0 0 24px rgba(56, 189, 248, 0.05) inset,
     0 0 1px rgba(56, 189, 248, 0.4);
+  /* The grid wrapper around panels is pointer-events:none so clicks in the
+     empty space reach the full-screen globe underneath — panels opt back
+     in here so their own buttons/inputs/links still work. */
+  pointer-events: auto;
 }
 
 /* Holographic HUD accents ------------------------------------------- */

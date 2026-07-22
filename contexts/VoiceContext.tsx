@@ -104,6 +104,15 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const handleCommand = useCallback(async (preHeard?: string) => {
     setStatus("listening");
     try {
+      // activate()/talkNow() resume the AudioContext, but that only covers
+      // turns starting from a fresh tap. A clap or the background "Jarvis"
+      // listener can trigger this with no click in the call stack at all —
+      // if the context auto-suspended since the last turn (common on
+      // mobile), TTS playback would silently produce no sound even though
+      // audioEl.play() succeeds, since its output is routed through a
+      // suspended Web Audio graph. Resuming here covers every path.
+      await resumeAudio();
+
       let heard = preHeard?.trim();
       if (!heard) {
         // Give a just-aborted background recognizer a beat to release.

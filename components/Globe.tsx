@@ -114,6 +114,48 @@ function project(
   return { x: x1 * persp, y: y1 * persp, z: z2 };
 }
 
+interface WaterState {
+  tilt: number;
+  phase: number;
+}
+
+// A clipped, tilting, wavy fill inside the disc — a cheap "liquid gauge"
+// look rather than true fluid sim, but driven by real spring physics so it
+// genuinely lags and sloshes rather than just wobbling on a fixed timer.
+function drawWater(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  water: WaterState,
+  hue: number
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.95, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.translate(cx, cy);
+  ctx.rotate(water.tilt);
+
+  const span = r * 3;
+  const level = -r * 0.12; // waterline sits slightly above center — "filled"
+  const step = Math.max(r * 0.15, 2);
+  ctx.beginPath();
+  ctx.moveTo(-span / 2, level);
+  for (let x = -span / 2; x <= span / 2; x += step) {
+    const y = level + Math.sin(x * (0.9 / r) + water.phase) * r * 0.07;
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(span / 2, r * 2.5);
+  ctx.lineTo(-span / 2, r * 2.5);
+  ctx.closePath();
+  ctx.fillStyle = `hsla(${hue}, 85%, 60%, 0.4)`;
+  ctx.fill();
+
+  ctx.restore();
+}
+
 function drawPlanet(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -126,7 +168,8 @@ function drawPlanet(
   planet: PlanetDef,
   detailed: boolean,
   dpr: number,
-  glow: number
+  glow: number,
+  water: WaterState | null
 ) {
   // Ambient glow
   const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.4);
@@ -142,6 +185,8 @@ function drawPlanet(
   ctx.fillStyle = `hsla(${planet.hue}, 70%, 45%, 0.08)`;
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fill();
+
+  if (water) drawWater(ctx, cx, cy, r, water, planet.hue + 160);
 
   const rings = detailed ? LAT_RINGS : LAT_RINGS.slice(0, 3);
   const meridians = detailed ? LON_MERIDIANS : LON_MERIDIANS.slice(0, 4);
@@ -326,6 +371,15 @@ export default function Globe() {
     let raf = 0;
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
 
+    // Per-planet liquid physics state (skipped for Earth). Deterministic
+    // phase offsets so each planet's slosh is out of sync with the others.
+    const waterStates = new Map<string, WaterState & { vel: number }>();
+    LINEUP.forEach((p, i) => {
+      if (p.name !== "Earth") {
+        waterStates.set(p.name, { tilt: 0, vel: 0, phase: hash(i + 500) * 10 });
+      }
+    });
+
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -366,10 +420,22 @@ export default function Globe() {
       const cosX = Math.cos(rotRef.current.x);
       const sinX = Math.sin(rotRef.current.x);
 
-      const singleR = Math.min(w, h) * 0.4 * (1 + lvl * 0.05);
-      const lineupR = Math.min(w, h) * 0.12;
+      // w/h are now the full viewport, not a small boxed container, so
+      // these ratios read much bigger on screen than before by design.
+      const singleR = Math.min(w, h) * 0.34 * (1 + lvl * 0.05);
+      const lineupR = Math.min(w, h) * 0.1;
       const centerX = w / 2;
       const centerY = h / 2;
+
+      // Same hand-driven rotation velocity that moves the globe also drives
+      // every planet's water — heavily damped ("slower speed") so it lags
+      // and sloshes rather than snapping to match the motion instantly.
+      const tiltTarget = Math.max(-0.4, Math.min(0.4, rotVelRef.current.y * 1.4));
+      waterStates.forEach((ws) => {
+        ws.vel = ws.vel * 0.9 + (tiltTarget - ws.tilt) * 0.012;
+        ws.tilt += ws.vel;
+        ws.phase += 0.015 + Math.abs(ws.vel) * 3;
+      });
 
       LINEUP.forEach((planet, i) => {
         const isEarth = planet.name === "Earth";
@@ -377,14 +443,28 @@ export default function Globe() {
         // to the center too (invisible, r -> 0) until the view opens up.
         const slotX =
           w * 0.5 - (LINEUP.length - 1) * (lineupR * 2.3) * 0.5 + i * lineupR * 2.3;
-        const cx = isEarth ? centerX + (slotX - centerX) * view : centerX + (slotX - centerX) * view;
+        const cx = centerX + (slotX - centerX) * view;
         const cy = centerY;
         const r = isEarth
           ? singleR + (lineupR - singleR) * view
           : lineupR * view;
         if (r < 1) return;
 
-        drawPlanet(ctx, cx, cy, r, cosY, sinY, cosX, sinX, planet, isEarth && view < 0.5, dpr, lvl);
+        drawPlanet(
+          ctx,
+          cx,
+          cy,
+          r,
+          cosY,
+          sinY,
+          cosX,
+          sinX,
+          planet,
+          isEarth && view < 0.5,
+          dpr,
+          lvl,
+          waterStates.get(planet.name) ?? null
+        );
       });
 
       raf = requestAnimationFrame(draw);
@@ -414,8 +494,13 @@ export default function Globe() {
         : null;
 
   return (
+    // Fixed full-viewport, deliberately outside the panel grid's flow — a
+    // holographic projection isn't boxed into a widget, it fills the room.
+    // Panels above it get their own stacking context (z-10) so they still
+    // render legibly on top; clicking a panel hits the panel, clicking any
+    // open space hits the globe underneath.
     <div
-      className="relative h-full w-full cursor-pointer"
+      className="fixed inset-0 z-0 cursor-pointer"
       onClick={() => (status === "inactive" ? activate() : talkNow())}
       role="button"
       aria-label={status === "inactive" ? "Activate JARVIS" : "Talk to JARVIS"}
@@ -427,11 +512,11 @@ export default function Globe() {
         playsInline
         style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
       />
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[11px] uppercase tracking-[0.3em] text-cyan-300/70 holo-text">
+      <div className="absolute top-[30%] left-1/2 -translate-x-1/2 text-[11px] uppercase tracking-[0.3em] text-cyan-300/70 holo-text">
         {STATUS_LABEL[status]}
       </div>
       {subtitle && (
-        <div className="pointer-events-none absolute bottom-14 left-1/2 w-[85%] max-w-md -translate-x-1/2 text-center">
+        <div className="pointer-events-none absolute top-[68%] left-1/2 w-[85%] max-w-md -translate-x-1/2 text-center">
           <p
             className={`rounded-md bg-black/40 px-3 py-1.5 text-sm backdrop-blur-sm ${subtitle.color}`}
           >
@@ -442,7 +527,7 @@ export default function Globe() {
       <button
         onClick={toggleHandTracking}
         disabled={handStatus === "starting"}
-        className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-cyan-400/30 bg-black/30 px-4 py-1.5 text-[11px] uppercase tracking-widest text-cyan-200/80 backdrop-blur transition hover:bg-cyan-500/10 disabled:opacity-50"
+        className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-cyan-400/30 bg-black/30 px-4 py-1.5 text-[11px] uppercase tracking-widest text-cyan-200/80 backdrop-blur transition hover:bg-cyan-500/10 disabled:opacity-50"
       >
         {handLabel[handStatus]}
       </button>
