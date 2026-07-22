@@ -11,7 +11,7 @@ const DOT_COLOR: Record<string, string> = {
 };
 
 export default function SystemStatusPanel() {
-  const { status, supported } = useVoice();
+  const { status, supported, lastTtsEngine } = useVoice();
 
   const rows = [
     { label: "Voice engine", value: supported ? "Online" : "Unsupported" },
@@ -40,6 +40,19 @@ export default function SystemStatusPanel() {
           </li>
         ))}
       </ul>
+      {lastTtsEngine && (
+        <div className="mt-1 border-t border-cyan-500/10 pt-2 text-xs">
+          <div className="flex items-center justify-between text-cyan-200/60">
+            <span>Last voice</span>
+            <span className={lastTtsEngine.engine === "elevenlabs" ? "text-emerald-300" : "text-amber-300"}>
+              {lastTtsEngine.engine === "elevenlabs" ? "ElevenLabs" : "Browser (fallback)"}
+            </span>
+          </div>
+          {lastTtsEngine.engine === "browser" && (
+            <p className="mt-1 text-cyan-200/40">Reason: {lastTtsEngine.reason}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

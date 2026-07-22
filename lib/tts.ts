@@ -6,12 +6,20 @@ export interface SpeakHandle {
   stop: () => void;
 }
 
+export type TtsEngineReport =
+  | { engine: "elevenlabs" }
+  | { engine: "browser"; reason: string };
+
 export interface SpeakOptions {
   // Called on every animation frame while JARVIS is speaking, 0..1.
   // Real spectrum data from ElevenLabs playback, or an approximated
   // pulse envelope when falling back to the browser's built-in voice.
   onLevel?: (level: number) => void;
   onEnd?: () => void;
+  // Reports which engine actually ended up producing audio, and why it
+  // fell back if it did — this was previously a black box even to the
+  // user, making "I can't hear him" impossible to diagnose remotely.
+  onEngine?: (report: TtsEngineReport) => void;
 }
 
 // Tries ElevenLabs (via our server route, so the API key stays server-side)
@@ -21,7 +29,8 @@ export async function speak(
   text: string,
   opts: SpeakOptions = {}
 ): Promise<SpeakHandle> {
-  const { onLevel, onEnd } = opts;
+  const { onLevel, onEnd, onEngine } = opts;
+  let fallbackReason = "unknown error";
 
   try {
     const res = await fetch("/api/tts", {
@@ -34,6 +43,10 @@ export async function speak(
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audioEl = new Audio(url);
+      // Defensive — rule out the audio element silently starting muted
+      // or at zero volume for any reason.
+      audioEl.muted = false;
+      audioEl.volume = 1;
       const analyser = createElementAnalyser(audioEl);
       const buffer = new Uint8Array(new ArrayBuffer(analyser.fftSize));
       let raf = 0;
@@ -54,6 +67,7 @@ export async function speak(
       });
 
       await audioEl.play();
+      onEngine?.({ engine: "elevenlabs" });
       tick();
 
       return {
@@ -64,10 +78,13 @@ export async function speak(
         },
       };
     }
-  } catch {
-    // Network error, etc. — fall through to the browser voice below.
+    fallbackReason = `server responded ${res.status}`;
+  } catch (err) {
+    // Network error, play() rejection (e.g. autoplay policy), etc.
+    fallbackReason = err instanceof Error ? err.message : String(err);
   }
 
+  onEngine?.({ engine: "browser", reason: fallbackReason });
   return speakWithBrowserVoice(text, { onLevel, onEnd });
 }
 
@@ -79,6 +96,7 @@ function speakWithBrowserVoice(
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = 1.02;
   utterance.pitch = 0.85; // slightly deeper — closer to a JARVIS tone
+  utterance.volume = 1;
 
   let stopped = false;
   let pulse = 0;

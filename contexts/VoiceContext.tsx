@@ -17,7 +17,7 @@ import {
   listenOnce,
   startContinuousListening,
 } from "@/lib/speechRecognition";
-import { speak } from "@/lib/tts";
+import { speak, type TtsEngineReport } from "@/lib/tts";
 import { askAssistant } from "@/lib/assistant";
 import { buildBriefingContext } from "@/lib/briefingContext";
 
@@ -34,6 +34,9 @@ interface VoiceContextValue {
   ttsLevel: number; // 0..1, live TTS playback amplitude (JARVIS talking)
   transcript: string;
   lastResponse: string;
+  // Which TTS engine actually produced the last response, and why it fell
+  // back if it did — otherwise this failure mode is a total black box.
+  lastTtsEngine: TtsEngineReport | null;
   supported: boolean;
   activate: () => Promise<void>;
   talkNow: () => Promise<void>; // tap-to-talk shortcut, skips the wake phrase
@@ -58,6 +61,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [ttsLevel, setTtsLevel] = useState(0);
   const [transcript, setTranscript] = useState("");
   const [lastResponse, setLastResponse] = useState("");
+  const [lastTtsEngine, setLastTtsEngine] = useState<TtsEngineReport | null>(null);
 
   const stopClapDetectorRef = useRef<(() => void) | null>(null);
   const stopLevelLoopRef = useRef<(() => void) | null>(null);
@@ -138,6 +142,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         speak(reply, {
           onLevel: setTtsLevel,
           onEnd: resolve,
+          onEngine: setLastTtsEngine,
         });
       });
     } catch {
@@ -207,6 +212,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         ttsLevel,
         transcript,
         lastResponse,
+        lastTtsEngine,
         supported,
         activate,
         talkNow,
