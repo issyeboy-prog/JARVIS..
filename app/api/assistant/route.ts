@@ -5,11 +5,13 @@ import type Anthropic from "@anthropic-ai/sdk";
 // Claude via Amazon Bedrock (AWS-billed) rather than a direct Anthropic key
 // — see AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION below. The bare
 // alias form ("anthropic.claude-haiku-4-5") 403'd as "not available for
-// this account" — this account's actual granted model access is the
-// dated Bedrock snapshot ID instead, confirmed working. If Anthropic adds
-// broader access later, the bare alias may start working too, but there's
-// no reason to churn a confirmed-working ID speculatively.
-const DEFAULT_MODEL = "anthropic.claude-haiku-4-5-20251001-v1:0";
+// this account"; the un-prefixed dated snapshot ID then 404'd as not
+// existing at all — a strong signal this model is only reachable through
+// a cross-region inference profile (the "us."-prefixed form Bedrock uses
+// for newer models instead of direct on-demand invocation). If this still
+// 404s, the exact ID needs to come from Bedrock's own "view code" export
+// in the console playground rather than guessing further.
+const DEFAULT_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 const SYSTEM_PROMPT = `You are JARVIS, a personal voice assistant running on someone's home dashboard.
 Keep replies short and conversational (1-3 sentences) since they'll be read aloud by text-to-speech.
