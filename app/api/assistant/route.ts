@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 
-// Server-side only — the Anthropic key never reaches the browser.
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001"; // fast, cheap — good fit for a voice loop
+// Claude via Amazon Bedrock (AWS-billed) rather than a direct Anthropic key
+// — see AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION below. Bedrock
+// model IDs carry an `anthropic.` prefix on top of the normal first-party
+// alias; fast/cheap fits a voice loop's latency budget.
+const DEFAULT_MODEL = "anthropic.claude-haiku-4-5";
 
 const SYSTEM_PROMPT = `You are JARVIS, a personal voice assistant running on someone's home dashboard.
 Keep replies short and conversational (1-3 sentences) since they'll be read aloud by text-to-speech.
@@ -12,7 +17,7 @@ When asked to add, remove, cancel, move, or otherwise change something on the sc
 
 // Executed client-side (the schedule lives in the browser's localStorage,
 // not on this server), so these are just the schemas Claude reasons about.
-const TOOLS = [
+const TOOLS: Anthropic.Tool[] = [
   {
     name: "add_schedule_event",
     description: "Add a new event to the user's daily schedule.",
@@ -53,17 +58,24 @@ interface ChatMessage {
   content: unknown;
 }
 
-interface AnthropicContentBlock {
-  type: string;
-  text?: string;
-  id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
+// Credentials resolve from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (the
+// standard AWS SDK env var names) automatically — only the region needs to
+// be passed explicitly here. One client instance is reused across requests
+// rather than rebuilt per call.
+let bedrockClient: AnthropicBedrockMantle | null = null;
+function getBedrockClient(): AnthropicBedrockMantle | null {
+  if (!process.env.AWS_REGION || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    return null;
+  }
+  if (!bedrockClient) {
+    bedrockClient = new AnthropicBedrockMantle({ awsRegion: process.env.AWS_REGION });
+  }
+  return bedrockClient;
 }
 
 export async function POST(request: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  const client = getBedrockClient();
+  if (!client) {
     return NextResponse.json(
       { error: "assistant-not-configured" },
       { status: 501 }
@@ -90,49 +102,39 @@ export async function POST(request: NextRequest) {
     messages = [{ role: "user", content: userMessage }];
   }
 
-  const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  let response: Anthropic.Message;
+  try {
+    response = await client.messages.create({
       model: process.env.ASSISTANT_MODEL || DEFAULT_MODEL,
       max_tokens: 400,
       system: SYSTEM_PROMPT,
       tools: TOOLS,
-      messages,
-    }),
-  });
-
-  if (!upstream.ok) {
-    const detail = await upstream.text().catch(() => "");
+      messages: messages as Anthropic.MessageParam[],
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
       { error: "assistant-request-failed", detail },
       { status: 502 }
     );
   }
 
-  const data = (await upstream.json()) as {
-    stop_reason: string;
-    content: AnthropicContentBlock[];
-  };
-
-  if (data.stop_reason === "tool_use") {
-    const toolCalls = data.content
-      .filter((b) => b.type === "tool_use")
-      .map((b) => ({ id: b.id!, name: b.name!, input: b.input ?? {} }));
+  if (response.stop_reason === "tool_use") {
+    const toolCalls = response.content
+      .filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use")
+      .map((b) => ({ id: b.id, name: b.name, input: b.input ?? {} }));
 
     return NextResponse.json({
       toolCalls,
       // The client appends a tool_result user turn to this and re-posts
       // it here to get the final natural-language confirmation.
-      messages: [...messages, { role: "assistant", content: data.content }],
+      messages: [...messages, { role: "assistant", content: response.content }],
     });
   }
 
-  const reply = data.content.find((b) => b.type === "text")?.text?.trim();
+  const reply = response.content
+    .find((b): b is Anthropic.TextBlock => b.type === "text")
+    ?.text?.trim();
   if (!reply) {
     return NextResponse.json({ error: "empty-reply" }, { status: 502 });
   }
