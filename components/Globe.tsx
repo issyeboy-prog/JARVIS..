@@ -8,99 +8,105 @@ import {
   type HandPoint,
 } from "@/lib/handGestures";
 
-// --- Planet data --------------------------------------------------------
+// --- Body-space armor geometry (module-level, deterministic, computed once) --
+//
+// A wireframe humanoid suit built from simple boxes in a loose y-up body
+// coordinate system (roughly -1.3..1.3). Each part has an "explode
+// direction" — its rest position relative to a central core — so a peace
+// sign can space every piece outward along a natural radial path (like an
+// exhibit's exploded diagram) and a fist can pull them back together.
 
-interface PlanetDef {
-  name: string;
-  hue: number;
-  relativeRadius: number; // real-world-ish proportion, used only for sort order
-  hasRing?: boolean;
-}
-
-const PLANETS: PlanetDef[] = [
-  { name: "Mercury", hue: 28, relativeRadius: 0.38 },
-  { name: "Venus", hue: 42, relativeRadius: 0.95 },
-  { name: "Earth", hue: 198, relativeRadius: 1.0 },
-  { name: "Mars", hue: 12, relativeRadius: 0.53 },
-  { name: "Jupiter", hue: 34, relativeRadius: 11.2 },
-  { name: "Saturn", hue: 46, relativeRadius: 9.45, hasRing: true },
-  { name: "Uranus", hue: 188, relativeRadius: 4.0 },
-  { name: "Neptune", hue: 222, relativeRadius: 3.88 },
-];
-const EARTH = PLANETS.find((p) => p.name === "Earth")!;
-// Earth always leads, then the rest ascending by size — not real order.
-const LINEUP: PlanetDef[] = [
-  EARTH,
-  ...PLANETS.filter((p) => p.name !== "Earth").sort(
-    (a, b) => a.relativeRadius - b.relativeRadius
-  ),
-];
-
-// --- Wireframe grid geometry (module-level, deterministic, computed once) --
-
-interface Dir {
+interface Vec3 {
   x: number;
   y: number;
   z: number;
 }
 
-function latLonToDir(latDeg: number, lonDeg: number): Dir {
-  const theta = ((90 - latDeg) * Math.PI) / 180;
-  const phi = (lonDeg * Math.PI) / 180;
-  return {
-    x: Math.sin(theta) * Math.cos(phi),
-    y: Math.sin(theta) * Math.sin(phi),
-    z: Math.cos(theta),
-  };
+function sub(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+function length(v: Vec3): number {
+  return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+function normalize(v: Vec3): Vec3 {
+  const len = length(v) || 1;
+  return { x: v.x / len, y: v.y / len, z: v.z / len };
 }
 
-const RING_RES = 32;
-const LAT_RINGS: Dir[][] = [];
-for (let i = 1; i < 6; i++) {
-  const lat = -90 + (180 / 6) * i;
-  const ring: Dir[] = [];
-  for (let j = 0; j <= RING_RES; j++) {
-    ring.push(latLonToDir(lat, (360 / RING_RES) * j - 180));
-  }
-  LAT_RINGS.push(ring);
-}
-const LON_MERIDIANS: Dir[][] = [];
-for (let i = 0; i < 8; i++) {
-  const lon = (360 / 8) * i - 180;
-  const meridian: Dir[] = [];
-  for (let j = 0; j <= RING_RES; j++) {
-    meridian.push(latLonToDir((180 / RING_RES) * j - 90, lon));
-  }
-  LON_MERIDIANS.push(meridian);
+interface ArmorPartDef {
+  id: string;
+  center: Vec3;
+  half: Vec3; // box half-extents
 }
 
-// Deterministic pseudo-random (no Math.random at module scope) clustered
-// around rough continent locations, just for a recognizable Earth silhouette.
+// Roughly: head, chest, abdomen, then paired left/right arm (upper/fore/
+// hand) and leg (thigh/shin/foot) segments — enough pieces to read as
+// armor without being expensive to draw at 60fps in a 2D canvas.
+const CORE: Vec3 = { x: 0, y: 0.45, z: 0 };
+const ARMOR_PARTS: ArmorPartDef[] = [
+  { id: "head", center: { x: 0, y: 1.15, z: 0 }, half: { x: 0.16, y: 0.19, z: 0.17 } },
+  { id: "chest", center: { x: 0, y: 0.62, z: 0 }, half: { x: 0.36, y: 0.4, z: 0.24 } },
+  { id: "abdomen", center: { x: 0, y: 0.14, z: 0 }, half: { x: 0.27, y: 0.18, z: 0.2 } },
+
+  { id: "armL_upper", center: { x: -0.52, y: 0.42, z: 0 }, half: { x: 0.1, y: 0.22, z: 0.11 } },
+  { id: "armL_fore", center: { x: -0.56, y: 0.02, z: 0 }, half: { x: 0.085, y: 0.19, z: 0.095 } },
+  { id: "armL_hand", center: { x: -0.58, y: -0.28, z: 0 }, half: { x: 0.075, y: 0.09, z: 0.08 } },
+  { id: "armR_upper", center: { x: 0.52, y: 0.42, z: 0 }, half: { x: 0.1, y: 0.22, z: 0.11 } },
+  { id: "armR_fore", center: { x: 0.56, y: 0.02, z: 0 }, half: { x: 0.085, y: 0.19, z: 0.095 } },
+  { id: "armR_hand", center: { x: 0.58, y: -0.28, z: 0 }, half: { x: 0.075, y: 0.09, z: 0.08 } },
+
+  { id: "legL_thigh", center: { x: -0.18, y: -0.38, z: 0 }, half: { x: 0.14, y: 0.26, z: 0.15 } },
+  { id: "legL_shin", center: { x: -0.18, y: -0.85, z: 0 }, half: { x: 0.11, y: 0.24, z: 0.12 } },
+  { id: "legL_foot", center: { x: -0.18, y: -1.14, z: 0.06 }, half: { x: 0.1, y: 0.06, z: 0.17 } },
+  { id: "legR_thigh", center: { x: 0.18, y: -0.38, z: 0 }, half: { x: 0.14, y: 0.26, z: 0.15 } },
+  { id: "legR_shin", center: { x: 0.18, y: -0.85, z: 0 }, half: { x: 0.11, y: 0.24, z: 0.12 } },
+  { id: "legR_foot", center: { x: 0.18, y: -1.14, z: 0.06 }, half: { x: 0.1, y: 0.06, z: 0.17 } },
+];
+
 function hash(i: number): number {
   const x = Math.sin(i * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
-const CONTINENT_CENTERS: [number, number, number][] = [
-  [40, -100, 18],
-  [-15, -60, 15],
-  [10, 20, 20],
-  [50, 30, 22],
-  [30, 100, 18],
-  [-25, 135, 12],
-];
-const CONTINENT_DIRS: Dir[] = [];
-CONTINENT_CENTERS.forEach(([lat, lon, spread], ci) => {
-  for (let i = 0; i < 16; i++) {
-    const a = hash(ci * 100 + i) * Math.PI * 2;
-    const r = hash(ci * 100 + i + 50) * spread;
-    CONTINENT_DIRS.push(latLonToDir(lat + Math.sin(a) * r, lon + Math.cos(a) * r));
-  }
-});
 
-const CAMERA_DIST = 2.8;
+interface ArmorPart extends ArmorPartDef {
+  explodeDir: Vec3;
+  explodeScale: number; // per-part variation so the spread looks organic, not uniform
+  corners: Vec3[]; // 8 rest-position box corners, precomputed once
+}
+
+const BOX_EDGES: [number, number][] = [
+  [0, 1], [1, 2], [2, 3], [3, 0], // bottom face
+  [4, 5], [5, 6], [6, 7], [7, 4], // top face
+  [0, 4], [1, 5], [2, 6], [3, 7], // verticals
+];
+
+function boxCorners(c: Vec3, h: Vec3): Vec3[] {
+  return [
+    { x: c.x - h.x, y: c.y - h.y, z: c.z - h.z },
+    { x: c.x + h.x, y: c.y - h.y, z: c.z - h.z },
+    { x: c.x + h.x, y: c.y - h.y, z: c.z + h.z },
+    { x: c.x - h.x, y: c.y - h.y, z: c.z + h.z },
+    { x: c.x - h.x, y: c.y + h.y, z: c.z - h.z },
+    { x: c.x + h.x, y: c.y + h.y, z: c.z - h.z },
+    { x: c.x + h.x, y: c.y + h.y, z: c.z + h.z },
+    { x: c.x - h.x, y: c.y + h.y, z: c.z + h.z },
+  ];
+}
+
+const ARMOR: ArmorPart[] = ARMOR_PARTS.map((def, i) => ({
+  ...def,
+  explodeDir: normalize(sub(def.center, CORE)),
+  explodeScale: 0.8 + hash(i + 900) * 0.4, // 0.8..1.2
+  corners: boxCorners(def.center, def.half),
+}));
+
+const HUE = 190; // cyan, matching the rest of the holographic UI
+const CORE_HUE = 42; // small warm "reactor" accent at the chest
+
+const CAMERA_DIST = 3.6;
 
 function project(
-  d: Dir,
+  d: Vec3,
   cosY: number,
   sinY: number,
   cosX: number,
@@ -114,136 +120,62 @@ function project(
   return { x: x1 * persp, y: y1 * persp, z: z2 };
 }
 
-interface WaterState {
-  tilt: number;
-  phase: number;
-}
+// How far a fully-exploded part travels from its assembled position, in
+// body-space units.
+const EXPLODE_DIST = 0.62;
 
-// A clipped, tilting, wavy fill inside the disc — a cheap "liquid gauge"
-// look rather than true fluid sim, but driven by real spring physics so it
-// genuinely lags and sloshes rather than just wobbling on a fixed timer.
-function drawWater(
+function drawArmorPart(
   ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  water: WaterState,
-  hue: number
-) {
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(cx, cy, r * 0.95, 0, Math.PI * 2);
-  ctx.clip();
-
-  ctx.translate(cx, cy);
-  ctx.rotate(water.tilt);
-
-  const span = r * 3;
-  const level = -r * 0.12; // waterline sits slightly above center — "filled"
-  const step = Math.max(r * 0.15, 2);
-  ctx.beginPath();
-  ctx.moveTo(-span / 2, level);
-  for (let x = -span / 2; x <= span / 2; x += step) {
-    const y = level + Math.sin(x * (0.9 / r) + water.phase) * r * 0.07;
-    ctx.lineTo(x, y);
-  }
-  ctx.lineTo(span / 2, r * 2.5);
-  ctx.lineTo(-span / 2, r * 2.5);
-  ctx.closePath();
-  ctx.fillStyle = `hsla(${hue}, 85%, 60%, 0.4)`;
-  ctx.fill();
-
-  ctx.restore();
-}
-
-function drawPlanet(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
+  part: ArmorPart,
+  explode: number,
   cosY: number,
   sinY: number,
   cosX: number,
   sinX: number,
-  planet: PlanetDef,
-  detailed: boolean,
-  dpr: number,
-  glow: number,
-  water: WaterState | null
+  scale: number,
+  cx: number,
+  cy: number,
+  dpr: number
 ) {
-  // Ambient glow
-  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.4);
-  g.addColorStop(0, `hsla(${planet.hue}, 90%, 65%, ${0.1 + glow * 0.12})`);
-  g.addColorStop(1, `hsla(${planet.hue}, 90%, 65%, 0)`);
-  ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r * 1.4, 0, Math.PI * 2);
-  ctx.fill();
+  const offset: Vec3 = {
+    x: part.explodeDir.x * explode * EXPLODE_DIST * part.explodeScale,
+    y: part.explodeDir.y * explode * EXPLODE_DIST * part.explodeScale,
+    z: part.explodeDir.z * explode * EXPLODE_DIST * part.explodeScale,
+  };
 
-  // Faint disc so the wireframe reads as a solid-ish holographic body
-  ctx.beginPath();
-  ctx.fillStyle = `hsla(${planet.hue}, 70%, 45%, 0.08)`;
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  if (water) drawWater(ctx, cx, cy, r, water, planet.hue + 160);
-
-  const rings = detailed ? LAT_RINGS : LAT_RINGS.slice(0, 3);
-  const meridians = detailed ? LON_MERIDIANS : LON_MERIDIANS.slice(0, 4);
-
-  ctx.lineWidth = Math.max(0.6, 0.9 * dpr);
-  for (const ring of rings) {
-    let sumZ = 0;
+  // A faint tether from the assembled position to the exploded one — the
+  // callout-line look of an exploded diagram, only visible mid-transition.
+  if (explode > 0.02) {
+    const restP = project(part.center, cosY, sinY, cosX, sinX);
+    const outP = project(
+      { x: part.center.x + offset.x, y: part.center.y + offset.y, z: part.center.z + offset.z },
+      cosY, sinY, cosX, sinX
+    );
     ctx.beginPath();
-    ring.forEach((d, i) => {
-      const p = project(d, cosY, sinY, cosX, sinX);
-      sumZ += p.z;
-      const px = cx + p.x * r;
-      const py = cy + p.y * r;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    const avgZ = sumZ / ring.length;
-    const alpha = 0.12 + Math.max(0, (avgZ + 1) / 2) * 0.45;
-    ctx.strokeStyle = `hsla(${planet.hue}, 90%, 70%, ${alpha})`;
-    ctx.stroke();
-  }
-  for (const meridian of meridians) {
-    let sumZ = 0;
-    ctx.beginPath();
-    meridian.forEach((d, i) => {
-      const p = project(d, cosY, sinY, cosX, sinX);
-      sumZ += p.z;
-      const px = cx + p.x * r;
-      const py = cy + p.y * r;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    const avgZ = sumZ / meridian.length;
-    const alpha = 0.1 + Math.max(0, (avgZ + 1) / 2) * 0.4;
-    ctx.strokeStyle = `hsla(${planet.hue}, 90%, 70%, ${alpha})`;
+    ctx.moveTo(cx + restP.x * scale, cy - restP.y * scale);
+    ctx.lineTo(cx + outP.x * scale, cy - outP.y * scale);
+    ctx.strokeStyle = `hsla(${HUE}, 80%, 70%, ${0.12 * explode})`;
+    ctx.lineWidth = Math.max(0.5, 0.6 * dpr);
     ctx.stroke();
   }
 
-  if (planet.name === "Earth" && detailed) {
-    for (const d of CONTINENT_DIRS) {
-      const p = project(d, cosY, sinY, cosX, sinX);
-      if (p.z < -0.1) continue; // far side — cull
-      const px = cx + p.x * r;
-      const py = cy + p.y * r;
-      const alpha = 0.35 + Math.max(0, p.z) * 0.5;
-      ctx.beginPath();
-      ctx.fillStyle = `hsla(140, 85%, 70%, ${alpha})`;
-      ctx.arc(px, py, Math.max(1.2 * dpr, r * 0.018), 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+  const projected = part.corners.map((c) =>
+    project(
+      { x: c.x + offset.x, y: c.y + offset.y, z: c.z + offset.z },
+      cosY, sinY, cosX, sinX
+    )
+  );
 
-  if (planet.hasRing) {
+  ctx.lineWidth = Math.max(0.7, 1 * dpr);
+  for (const [a, b] of BOX_EDGES) {
+    const pa = projected[a];
+    const pb = projected[b];
+    const avgZ = (pa.z + pb.z) / 2;
+    const alpha = 0.2 + Math.max(0, (avgZ + 1) / 2) * 0.6;
+    ctx.strokeStyle = `hsla(${HUE}, 90%, 70%, ${Math.min(1, alpha)})`;
     ctx.beginPath();
-    ctx.ellipse(cx, cy, r * 1.9, r * 0.5, 0.25, 0, Math.PI * 2);
-    ctx.strokeStyle = `hsla(${planet.hue}, 80%, 75%, 0.5)`;
-    ctx.lineWidth = Math.max(1, 1.4 * dpr);
+    ctx.moveTo(cx + pa.x * scale, cy - pa.y * scale);
+    ctx.lineTo(cx + pb.x * scale, cy - pb.y * scale);
     ctx.stroke();
   }
 }
@@ -278,10 +210,11 @@ export default function Globe() {
   const rotVelRef = useRef({ x: 0, y: 0 });
 
   const lastHandPosRef = useRef<HandPoint | null>(null);
-  const swipeHistoryRef = useRef<{ x: number; t: number }[]>([]);
-  const lastSwipeAtRef = useRef(0);
-  const viewTargetRef = useRef(0); // 0 = single Earth, 1 = lineup
-  const viewRef = useRef(0);
+  // 0 = assembled suit, 1 = fully exploded/examined. A peace sign opens it
+  // up, a fist reassembles it — target snaps instantly, the rendered value
+  // eases toward it for a smooth open/close rather than a jump cut.
+  const explodeTargetRef = useRef(0);
+  const explodeRef = useRef(0);
 
   useEffect(() => {
     levelRef.current = Math.max(micLevel, ttsLevel);
@@ -319,7 +252,6 @@ export default function Globe() {
     setHandStatus("starting");
     try {
       lastHandPosRef.current = null;
-      swipeHistoryRef.current = [];
 
       trackerRef.current = await startHandGestures(video, {
         onHands: (hands) => {
@@ -335,20 +267,6 @@ export default function Globe() {
             return;
           }
 
-          const now = performance.now();
-          // Swipe detection runs on raw position, independent of the
-          // damped visual rotation below.
-          const hist = swipeHistoryRef.current;
-          hist.push({ x: drive.x, t: now });
-          while (hist.length && now - hist[0].t > 300) hist.shift();
-          if (hist.length > 2 && now - lastSwipeAtRef.current > 800) {
-            const dx = drive.x - hist[0].x;
-            if (Math.abs(dx) > 0.22) {
-              lastSwipeAtRef.current = now;
-              viewTargetRef.current = viewTargetRef.current === 0 ? 1 : 0;
-            }
-          }
-
           const last = lastHandPosRef.current;
           if (last) {
             const dx = drive.x - last.x;
@@ -359,14 +277,14 @@ export default function Globe() {
           }
           lastHandPosRef.current = drive;
         },
+        // Peace sign: space every armor part outward, like examining an
+        // exploded diagram of the suit.
+        onPeaceSign: () => {
+          explodeTargetRef.current = 1;
+        },
+        // Closed fist: pull everything back into the assembled suit.
         onFist: () => {
-          // Fist toggles the view too — a deliberate, low-precision
-          // gesture fits the "less accurate, slimy" feel better than
-          // demanding a clean swipe every time.
-          if (performance.now() - lastSwipeAtRef.current > 800) {
-            lastSwipeAtRef.current = performance.now();
-            viewTargetRef.current = viewTargetRef.current === 0 ? 1 : 0;
-          }
+          explodeTargetRef.current = 0;
         },
       });
       setHandStatus("active");
@@ -389,15 +307,6 @@ export default function Globe() {
 
     let raf = 0;
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
-
-    // Per-planet liquid physics state (skipped for Earth). Deterministic
-    // phase offsets so each planet's slosh is out of sync with the others.
-    const waterStates = new Map<string, WaterState & { vel: number }>();
-    LINEUP.forEach((p, i) => {
-      if (p.name !== "Earth") {
-        waterStates.set(p.name, { tilt: 0, vel: 0, phase: hash(i + 500) * 10 });
-      }
-    });
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
@@ -429,8 +338,7 @@ export default function Globe() {
       rotRef.current.x += rotVelRef.current.x;
       rotRef.current.y += rotVelRef.current.y;
 
-      viewRef.current += (viewTargetRef.current - viewRef.current) * 0.06;
-      const view = viewRef.current;
+      explodeRef.current += (explodeTargetRef.current - explodeRef.current) * 0.06;
 
       ctx.clearRect(0, 0, w, h);
 
@@ -439,58 +347,51 @@ export default function Globe() {
       const cosX = Math.cos(rotRef.current.x);
       const sinX = Math.sin(rotRef.current.x);
 
-      // w/h are now the full viewport, not a small boxed container, so
-      // these ratios read much bigger on screen than before by design.
-      const singleR = Math.min(w, h) * 0.34 * (1 + lvl * 0.05);
-      const lineupR = Math.min(w, h) * 0.1;
       const centerX = w / 2;
       const centerY = h / 2;
+      // Leaves headroom for parts to spread out on explode without
+      // running off-screen — full viewport, not a boxed widget.
+      const scale = Math.min(w, h) * 0.24 * (1 + lvl * 0.04);
 
-      // Same hand-driven rotation velocity that moves the globe also drives
-      // every planet's water, but as a proper lightly-damped pendulum now
-      // rather than a quick proportional spring: a weak restoring force
-      // plus near-1 velocity retention means it takes real time to build
-      // up momentum and keeps sloshing/overshooting past level for a
-      // while before finally settling, instead of just tracking the hand.
-      const tiltTarget = Math.max(-0.35, Math.min(0.35, rotVelRef.current.y * 0.9));
-      const RESTORING_FORCE = 0.0022;
-      const INERTIA = 0.975;
-      waterStates.forEach((ws) => {
-        ws.vel += (tiltTarget - ws.tilt) * RESTORING_FORCE;
-        ws.vel *= INERTIA;
-        ws.tilt += ws.vel;
-        ws.phase += 0.01 + Math.abs(ws.vel) * 4;
-      });
+      // One soft ambient glow behind the whole figure rather than one per
+      // part — cheaper, and reads as a single holographic projection
+      // rather than a dozen separate glowing blobs.
+      const glowR = scale * (1.7 + explodeRef.current * 0.9);
+      const g = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR);
+      g.addColorStop(0, `hsla(${HUE}, 90%, 65%, ${0.08 + lvl * 0.1})`);
+      g.addColorStop(1, `hsla(${HUE}, 90%, 65%, 0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, glowR, 0, Math.PI * 2);
+      ctx.fill();
 
-      LINEUP.forEach((planet, i) => {
-        const isEarth = planet.name === "Earth";
-        // Single-view position: Earth at center, everyone else collapsed
-        // to the center too (invisible, r -> 0) until the view opens up.
-        const slotX =
-          w * 0.5 - (LINEUP.length - 1) * (lineupR * 2.3) * 0.5 + i * lineupR * 2.3;
-        const cx = centerX + (slotX - centerX) * view;
-        const cy = centerY;
-        const r = isEarth
-          ? singleR + (lineupR - singleR) * view
-          : lineupR * view;
-        if (r < 1) return;
-
-        drawPlanet(
-          ctx,
-          cx,
-          cy,
-          r,
-          cosY,
-          sinY,
-          cosX,
-          sinX,
-          planet,
-          isEarth && view < 0.5,
-          dpr,
-          lvl,
-          waterStates.get(planet.name) ?? null
+      for (const part of ARMOR) {
+        drawArmorPart(
+          ctx, part, explodeRef.current, cosY, sinY, cosX, sinX, scale, centerX, centerY, dpr
         );
-      });
+      }
+
+      // A small pulsing "reactor" core at the chest — fades out once the
+      // chest plate has moved away from center during the explode.
+      const chestP = project(
+        {
+          x: CORE.x,
+          y: CORE.y,
+          z: CORE.z + 0.2,
+        },
+        cosY, sinY, cosX, sinX
+      );
+      const coreAlpha = (0.5 + lvl * 0.4) * (1 - explodeRef.current * 0.7);
+      ctx.beginPath();
+      ctx.fillStyle = `hsla(${CORE_HUE}, 95%, 70%, ${coreAlpha})`;
+      ctx.arc(
+        centerX + chestP.x * scale,
+        centerY - chestP.y * scale,
+        Math.max(1.5 * dpr, scale * 0.035),
+        0,
+        Math.PI * 2
+      );
+      ctx.fill();
 
       raf = requestAnimationFrame(draw);
     };

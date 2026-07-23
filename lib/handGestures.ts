@@ -28,6 +28,10 @@ export interface HandGestureCallbacks {
   // raw per-frame landmarks, to cut down on jitter.
   onHands: (hands: { left: HandPoint | null; right: HandPoint | null }) => void;
   onFist: () => void; // fires once per fresh Closed_Fist detection, either hand
+  // Fires once per fresh Victory (peace sign — index + middle extended)
+  // detection, either hand. "Victory" is MediaPipe's built-in category
+  // name for this gesture — no custom landmark geometry needed.
+  onPeaceSign?: () => void;
 }
 
 const WASM_URL =
@@ -63,7 +67,7 @@ function smooth(prev: HandPoint | null, next: HandPoint): HandPoint {
 
 export async function startHandGestures(
   videoEl: HTMLVideoElement,
-  { onHands, onFist }: HandGestureCallbacks
+  { onHands, onFist, onPeaceSign }: HandGestureCallbacks
 ): Promise<HandGestureHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
@@ -75,6 +79,7 @@ export async function startHandGestures(
   let stopped = false;
   let raf = 0;
   let wasFist = false;
+  let wasPeaceSign = false;
   let smoothedLeft: HandPoint | null = null;
   let smoothedRight: HandPoint | null = null;
 
@@ -103,6 +108,12 @@ export async function startHandGestures(
       );
       if (isFist && !wasFist) onFist();
       wasFist = isFist;
+
+      const isPeaceSign = result.gestures.some(
+        (g) => g[0]?.categoryName === "Victory" && g[0].score > 0.6
+      );
+      if (isPeaceSign && !wasPeaceSign) onPeaceSign?.();
+      wasPeaceSign = isPeaceSign;
     }
     raf = requestAnimationFrame(tick);
   };
