@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { useVoice, type VoiceStatus } from "@/contexts/VoiceContext";
 import {
   startHandGestures,
@@ -8,75 +13,77 @@ import {
   type HandPoint,
 } from "@/lib/handGestures";
 
-// --- Body-space armor geometry (module-level, deterministic, computed once) --
+// --- Body-space armor rig -------------------------------------------------
 //
-// A wireframe humanoid suit built from simple boxes in a loose y-up body
-// coordinate system (roughly -1.3..1.3). Each part has an "explode
+// An original, hand-authored armor design — no licensed model or ripped
+// assets, just primitive geometry (rounded panels, rings, spheres) built
+// into a loose y-up body rig and rendered with real lighting/materials
+// instead of flat wireframe lines. Each part knows its own "explode
 // direction" — its rest position relative to a central core — so a peace
-// sign can space every piece outward along a natural radial path (like an
-// exhibit's exploded diagram) and a fist can pull them back together.
+// sign can space every piece outward along a natural radial path (an
+// exhibit's exploded diagram) and a fist pulls it back together, both
+// driven by actual Object3D transforms rather than manual per-frame
+// projection math.
 
-interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
-}
-
-function sub(a: Vec3, b: Vec3): Vec3 {
-  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
-}
-function length(v: Vec3): number {
-  return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-}
-function normalize(v: Vec3): Vec3 {
-  const len = length(v) || 1;
-  return { x: v.x / len, y: v.y / len, z: v.z / len };
-}
-
-interface ArmorPartDef {
+interface PartDef {
   id: string;
-  center: Vec3;
-  half: Vec3; // box half-extents
+  center: THREE.Vector3;
+  half: THREE.Vector3;
 }
 
-// Roughly: head, chest, abdomen, then paired left/right arm (shoulder/
-// upper/fore/hand) and leg (thigh/shin/foot) segments — enough pieces to
-// read as armor without being expensive to draw at 60fps in a 2D canvas.
-// Proportions deliberately lean toward the familiar "armored hero"
-// silhouette — broad pauldron shoulders, a jaw/faceplate split on the
-// helmet, chunky gauntlets and boots — this is an original wireframe
-// design in that general style, not a reproduction of any specific
-// licensed character model.
-const CORE: Vec3 = { x: 0, y: 0.45, z: 0 };
-const ARMOR_PARTS: ArmorPartDef[] = [
-  { id: "head_dome", center: { x: 0, y: 1.22, z: 0 }, half: { x: 0.145, y: 0.12, z: 0.145 } },
-  { id: "head_jaw", center: { x: 0, y: 1.03, z: 0.02 }, half: { x: 0.12, y: 0.09, z: 0.155 } },
-  { id: "chest", center: { x: 0, y: 0.62, z: 0 }, half: { x: 0.36, y: 0.4, z: 0.24 } },
-  { id: "abdomen", center: { x: 0, y: 0.14, z: 0 }, half: { x: 0.27, y: 0.18, z: 0.2 } },
+const CORE = new THREE.Vector3(0, 0.45, 0);
 
-  { id: "shoulderL", center: { x: -0.5, y: 0.74, z: 0.01 }, half: { x: 0.155, y: 0.11, z: 0.14 } },
-  { id: "armL_upper", center: { x: -0.52, y: 0.42, z: 0 }, half: { x: 0.1, y: 0.22, z: 0.11 } },
-  { id: "armL_fore", center: { x: -0.56, y: 0.02, z: 0 }, half: { x: 0.085, y: 0.19, z: 0.095 } },
-  { id: "armL_hand", center: { x: -0.58, y: -0.28, z: 0 }, half: { x: 0.09, y: 0.1, z: 0.09 } },
-  { id: "shoulderR", center: { x: 0.5, y: 0.74, z: 0.01 }, half: { x: 0.155, y: 0.11, z: 0.14 } },
-  { id: "armR_upper", center: { x: 0.52, y: 0.42, z: 0 }, half: { x: 0.1, y: 0.22, z: 0.11 } },
-  { id: "armR_fore", center: { x: 0.56, y: 0.02, z: 0 }, half: { x: 0.085, y: 0.19, z: 0.095 } },
-  { id: "armR_hand", center: { x: 0.58, y: -0.28, z: 0 }, half: { x: 0.09, y: 0.1, z: 0.09 } },
+const PART_DEFS: PartDef[] = [
+  { id: "head_dome", center: new THREE.Vector3(0, 1.22, 0), half: new THREE.Vector3(0.145, 0.12, 0.145) },
+  { id: "head_jaw", center: new THREE.Vector3(0, 1.03, 0.02), half: new THREE.Vector3(0.12, 0.09, 0.155) },
+  { id: "chest", center: new THREE.Vector3(0, 0.62, 0), half: new THREE.Vector3(0.36, 0.4, 0.24) },
+  { id: "abdomen", center: new THREE.Vector3(0, 0.14, 0), half: new THREE.Vector3(0.27, 0.18, 0.2) },
 
-  { id: "legL_thigh", center: { x: -0.18, y: -0.38, z: 0 }, half: { x: 0.14, y: 0.26, z: 0.15 } },
-  { id: "legL_shin", center: { x: -0.18, y: -0.85, z: 0 }, half: { x: 0.11, y: 0.24, z: 0.12 } },
-  { id: "legL_foot", center: { x: -0.18, y: -1.15, z: 0.06 }, half: { x: 0.12, y: 0.07, z: 0.19 } },
-  { id: "legR_thigh", center: { x: 0.18, y: -0.38, z: 0 }, half: { x: 0.14, y: 0.26, z: 0.15 } },
-  { id: "legR_shin", center: { x: 0.18, y: -0.85, z: 0 }, half: { x: 0.11, y: 0.24, z: 0.12 } },
-  { id: "legR_foot", center: { x: 0.18, y: -1.15, z: 0.06 }, half: { x: 0.12, y: 0.07, z: 0.19 } },
+  { id: "shoulderL", center: new THREE.Vector3(-0.5, 0.74, 0.01), half: new THREE.Vector3(0.155, 0.11, 0.14) },
+  { id: "armL_upper", center: new THREE.Vector3(-0.52, 0.42, 0), half: new THREE.Vector3(0.1, 0.22, 0.11) },
+  { id: "armL_fore", center: new THREE.Vector3(-0.56, 0.02, 0), half: new THREE.Vector3(0.085, 0.19, 0.095) },
+  { id: "armL_hand", center: new THREE.Vector3(-0.58, -0.28, 0), half: new THREE.Vector3(0.09, 0.1, 0.09) },
+  { id: "shoulderR", center: new THREE.Vector3(0.5, 0.74, 0.01), half: new THREE.Vector3(0.155, 0.11, 0.14) },
+  { id: "armR_upper", center: new THREE.Vector3(0.52, 0.42, 0), half: new THREE.Vector3(0.1, 0.22, 0.11) },
+  { id: "armR_fore", center: new THREE.Vector3(0.56, 0.02, 0), half: new THREE.Vector3(0.085, 0.19, 0.095) },
+  { id: "armR_hand", center: new THREE.Vector3(0.58, -0.28, 0), half: new THREE.Vector3(0.09, 0.1, 0.09) },
+
+  { id: "legL_thigh", center: new THREE.Vector3(-0.18, -0.38, 0), half: new THREE.Vector3(0.14, 0.26, 0.15) },
+  { id: "legL_shin", center: new THREE.Vector3(-0.18, -0.85, 0), half: new THREE.Vector3(0.11, 0.24, 0.12) },
+  { id: "legL_foot", center: new THREE.Vector3(-0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
+  { id: "legR_thigh", center: new THREE.Vector3(0.18, -0.38, 0), half: new THREE.Vector3(0.14, 0.26, 0.15) },
+  { id: "legR_shin", center: new THREE.Vector3(0.18, -0.85, 0), half: new THREE.Vector3(0.11, 0.24, 0.12) },
+  { id: "legR_foot", center: new THREE.Vector3(0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
 ];
 
-// A couple of bright glowing points on the jaw plate for the "eye slit"
-// look — not armor boxes, just small lit dots that ride along with the
-// jaw piece during the explode.
-const EYES: Vec3[] = [
-  { x: -0.055, y: 1.05, z: 0.16 },
-  { x: 0.055, y: 1.05, z: 0.16 },
+interface JointDef {
+  position: THREE.Vector3;
+  followPartId: string;
+}
+
+// Small sensor rings at the joints — shoulders, elbows, wrists, hips,
+// knees, ankles, neck. Parented to whichever part they anchor to, so
+// they travel with it automatically during explode/reassemble.
+const JOINT_DEFS: JointDef[] = [
+  { position: new THREE.Vector3(0, 0.96, 0.03), followPartId: "head_jaw" },
+  { position: new THREE.Vector3(-0.5, 0.6, 0.02), followPartId: "shoulderL" },
+  { position: new THREE.Vector3(0.5, 0.6, 0.02), followPartId: "shoulderR" },
+  { position: new THREE.Vector3(-0.55, 0.2, 0), followPartId: "armL_fore" },
+  { position: new THREE.Vector3(0.55, 0.2, 0), followPartId: "armR_fore" },
+  { position: new THREE.Vector3(-0.57, -0.15, 0), followPartId: "armL_hand" },
+  { position: new THREE.Vector3(0.57, -0.15, 0), followPartId: "armR_hand" },
+  { position: new THREE.Vector3(-0.18, -0.13, 0.02), followPartId: "legL_thigh" },
+  { position: new THREE.Vector3(0.18, -0.13, 0.02), followPartId: "legR_thigh" },
+  { position: new THREE.Vector3(-0.18, -0.62, 0), followPartId: "legL_shin" },
+  { position: new THREE.Vector3(0.18, -0.62, 0), followPartId: "legR_shin" },
+  { position: new THREE.Vector3(-0.18, -1.0, 0.05), followPartId: "legL_foot" },
+  { position: new THREE.Vector3(0.18, -1.0, 0.05), followPartId: "legR_foot" },
+];
+
+// Glowing "eye slit" points on the jaw plate.
+const EYE_DEFS = [
+  new THREE.Vector3(-0.055, 1.05, 0.16),
+  new THREE.Vector3(0.055, 1.05, 0.16),
 ];
 
 function hash(i: number): number {
@@ -84,211 +91,13 @@ function hash(i: number): number {
   return x - Math.floor(x);
 }
 
-interface ArmorPart extends ArmorPartDef {
-  explodeDir: Vec3;
-  explodeScale: number; // per-part variation so the spread looks organic, not uniform
-  corners: Vec3[]; // 8 rest-position box corners, precomputed once
-}
-
-const BOX_EDGES: [number, number][] = [
-  [0, 1], [1, 2], [2, 3], [3, 0], // bottom face
-  [4, 5], [5, 6], [6, 7], [7, 4], // top face
-  [0, 4], [1, 5], [2, 6], [3, 7], // verticals
-];
-
-function boxCorners(c: Vec3, h: Vec3): Vec3[] {
-  return [
-    { x: c.x - h.x, y: c.y - h.y, z: c.z - h.z },
-    { x: c.x + h.x, y: c.y - h.y, z: c.z - h.z },
-    { x: c.x + h.x, y: c.y - h.y, z: c.z + h.z },
-    { x: c.x - h.x, y: c.y - h.y, z: c.z + h.z },
-    { x: c.x - h.x, y: c.y + h.y, z: c.z - h.z },
-    { x: c.x + h.x, y: c.y + h.y, z: c.z - h.z },
-    { x: c.x + h.x, y: c.y + h.y, z: c.z + h.z },
-    { x: c.x - h.x, y: c.y + h.y, z: c.z + h.z },
-  ];
-}
-
-const ARMOR: ArmorPart[] = ARMOR_PARTS.map((def, i) => ({
-  ...def,
-  explodeDir: normalize(sub(def.center, CORE)),
-  explodeScale: 0.8 + hash(i + 900) * 0.4, // 0.8..1.2
-  corners: boxCorners(def.center, def.half),
-}));
-const ARMOR_BY_ID = new Map(ARMOR.map((p) => [p.id, p]));
-
-// Small sensor-ring markers at the joints — shoulders, elbows, wrists,
-// hips, knees, ankles, neck — the scattered circular HUD readouts that
-// make a wireframe body read as "scanned tech" rather than a plain
-// mannequin. Each rides along with whichever limb segment it anchors to,
-// so it separates with that piece during the explode.
-interface JointDef {
-  position: Vec3;
-  followPartId: string;
-}
-const JOINTS: JointDef[] = [
-  { position: { x: 0, y: 0.96, z: 0.03 }, followPartId: "head_jaw" },
-  { position: { x: -0.5, y: 0.6, z: 0.02 }, followPartId: "shoulderL" },
-  { position: { x: 0.5, y: 0.6, z: 0.02 }, followPartId: "shoulderR" },
-  { position: { x: -0.55, y: 0.2, z: 0 }, followPartId: "armL_fore" },
-  { position: { x: 0.55, y: 0.2, z: 0 }, followPartId: "armR_fore" },
-  { position: { x: -0.57, y: -0.15, z: 0 }, followPartId: "armL_hand" },
-  { position: { x: 0.57, y: -0.15, z: 0 }, followPartId: "armR_hand" },
-  { position: { x: -0.18, y: -0.13, z: 0.02 }, followPartId: "legL_thigh" },
-  { position: { x: 0.18, y: -0.13, z: 0.02 }, followPartId: "legR_thigh" },
-  { position: { x: -0.18, y: -0.62, z: 0 }, followPartId: "legL_shin" },
-  { position: { x: 0.18, y: -0.62, z: 0 }, followPartId: "legR_shin" },
-  { position: { x: -0.18, y: -1.0, z: 0.05 }, followPartId: "legL_foot" },
-  { position: { x: 0.18, y: -1.0, z: 0.05 }, followPartId: "legR_foot" },
-];
-
-const HUE = 190; // cyan, matching the rest of the holographic UI
-const CORE_HUE = 42; // small warm "reactor" accent at the chest
-
-const CAMERA_DIST = 3.6;
-
-function project(
-  d: Vec3,
-  cosY: number,
-  sinY: number,
-  cosX: number,
-  sinX: number
-) {
-  const x1 = d.x * cosY + d.z * sinY;
-  const z1 = -d.x * sinY + d.z * cosY;
-  const y1 = d.y * cosX - z1 * sinX;
-  const z2 = d.y * sinX + z1 * cosX;
-  const persp = CAMERA_DIST / (CAMERA_DIST - z2);
-  return { x: x1 * persp, y: y1 * persp, z: z2 };
-}
-
 // How far a fully-exploded part travels from its assembled position, in
 // body-space units.
 const EXPLODE_DIST = 0.62;
-
-function explodeOffset(part: ArmorPart, explode: number): Vec3 {
-  return {
-    x: part.explodeDir.x * explode * EXPLODE_DIST * part.explodeScale,
-    y: part.explodeDir.y * explode * EXPLODE_DIST * part.explodeScale,
-    z: part.explodeDir.z * explode * EXPLODE_DIST * part.explodeScale,
-  };
-}
-
-function drawArmorPart(
-  ctx: CanvasRenderingContext2D,
-  part: ArmorPart,
-  explode: number,
-  cosY: number,
-  sinY: number,
-  cosX: number,
-  sinX: number,
-  scale: number,
-  cx: number,
-  cy: number,
-  dpr: number
-) {
-  const offset = explodeOffset(part, explode);
-
-  // A faint tether from the assembled position to the exploded one — the
-  // callout-line look of an exploded diagram, only visible mid-transition.
-  if (explode > 0.02) {
-    const restP = project(part.center, cosY, sinY, cosX, sinX);
-    const outP = project(
-      { x: part.center.x + offset.x, y: part.center.y + offset.y, z: part.center.z + offset.z },
-      cosY, sinY, cosX, sinX
-    );
-    ctx.beginPath();
-    ctx.moveTo(cx + restP.x * scale, cy - restP.y * scale);
-    ctx.lineTo(cx + outP.x * scale, cy - outP.y * scale);
-    ctx.strokeStyle = `hsla(${HUE}, 80%, 70%, ${0.12 * explode})`;
-    ctx.lineWidth = Math.max(0.5, 0.6 * dpr);
-    ctx.stroke();
-  }
-
-  const projected = part.corners.map((c) =>
-    project(
-      { x: c.x + offset.x, y: c.y + offset.y, z: c.z + offset.z },
-      cosY, sinY, cosX, sinX
-    )
-  );
-
-  ctx.lineWidth = Math.max(0.7, 1 * dpr);
-  for (const [a, b] of BOX_EDGES) {
-    const pa = projected[a];
-    const pb = projected[b];
-    const avgZ = (pa.z + pb.z) / 2;
-    const alpha = 0.2 + Math.max(0, (avgZ + 1) / 2) * 0.6;
-    ctx.strokeStyle = `hsla(${HUE}, 90%, 70%, ${Math.min(1, alpha)})`;
-    ctx.beginPath();
-    ctx.moveTo(cx + pa.x * scale, cy - pa.y * scale);
-    ctx.lineTo(cx + pb.x * scale, cy - pb.y * scale);
-    ctx.stroke();
-  }
-
-  // Circuit-panel lines across the chest plate's front face (corners
-  // 2/3 bottom-front, 6/7 top-front — see boxCorners' ordering) — an X
-  // and a midline, the "scanned tech" detailing from the reference.
-  // Fades as the chest separates during explode so it doesn't read as a
-  // flat decal floating mid-air.
-  if (part.id === "chest") {
-    const panelAlpha = Math.max(0.04, 0.22 * (1 - explode * 0.8));
-    ctx.strokeStyle = `hsla(${HUE}, 90%, 78%, ${panelAlpha})`;
-    ctx.lineWidth = Math.max(0.5, 0.6 * dpr);
-    ctx.beginPath();
-    ctx.moveTo(cx + projected[3].x * scale, cy - projected[3].y * scale);
-    ctx.lineTo(cx + projected[6].x * scale, cy - projected[6].y * scale);
-    ctx.moveTo(cx + projected[2].x * scale, cy - projected[2].y * scale);
-    ctx.lineTo(cx + projected[7].x * scale, cy - projected[7].y * scale);
-    const midBottom = {
-      x: (projected[2].x + projected[3].x) / 2,
-      y: (projected[2].y + projected[3].y) / 2,
-    };
-    const midTop = {
-      x: (projected[6].x + projected[7].x) / 2,
-      y: (projected[6].y + projected[7].y) / 2,
-    };
-    ctx.moveTo(cx + midBottom.x * scale, cy - midBottom.y * scale);
-    ctx.lineTo(cx + midTop.x * scale, cy - midTop.y * scale);
-    ctx.stroke();
-  }
-}
-
-function drawJoint(
-  ctx: CanvasRenderingContext2D,
-  joint: JointDef,
-  explode: number,
-  cosY: number,
-  sinY: number,
-  cosX: number,
-  sinX: number,
-  scale: number,
-  cx: number,
-  cy: number,
-  dpr: number
-) {
-  const part = ARMOR_BY_ID.get(joint.followPartId);
-  if (!part) return;
-  const offset = explodeOffset(part, explode);
-  const p = project(
-    { x: joint.position.x + offset.x, y: joint.position.y + offset.y, z: joint.position.z + offset.z },
-    cosY, sinY, cosX, sinX
-  );
-  const px = cx + p.x * scale;
-  const py = cy - p.y * scale;
-  const alpha = 0.35 + Math.max(0, (p.z + 1) / 2) * 0.5;
-  const r = Math.max(2 * dpr, scale * 0.026);
-
-  ctx.beginPath();
-  ctx.strokeStyle = `hsla(${HUE}, 95%, 78%, ${alpha})`;
-  ctx.lineWidth = Math.max(0.6, 0.8 * dpr);
-  ctx.arc(px, py, r, 0, Math.PI * 2);
-  ctx.stroke();
-  // A tiny filled center so it reads as a sensor/rivet, not just a ring.
-  ctx.beginPath();
-  ctx.fillStyle = `hsla(${HUE}, 95%, 85%, ${alpha * 0.7})`;
-  ctx.arc(px, py, r * 0.28, 0, Math.PI * 2);
-  ctx.fill();
-}
+const PANEL_RADIUS = 0.03;
+const HUE_HEX = 0x38bdf8; // cyan, matching the rest of the holographic UI
+const EDGE_HEX = 0x7dd3fc;
+const REACTOR_HEX = 0xf5a524; // warm amber accent
 
 // --- Component -----------------------------------------------------------
 
@@ -320,9 +129,7 @@ export default function Globe() {
   const rotVelRef = useRef({ x: 0, y: 0 });
 
   const lastHandPosRef = useRef<HandPoint | null>(null);
-  // 0 = assembled suit, 1 = fully exploded/examined. A peace sign opens it
-  // up, a fist reassembles it — target snaps instantly, the rendered value
-  // eases toward it for a smooth open/close rather than a jump cut.
+  // 0 = assembled suit, 1 = fully exploded/examined.
   const explodeTargetRef = useRef(0);
   const explodeRef = useRef(0);
 
@@ -336,8 +143,6 @@ export default function Globe() {
   // just stays on screen, readable at your own pace, until the next
   // command overwrites it. Hidden during active listening so it doesn't
   // look like stale leftover text while a fresh command is being captured.
-  // A failed attempt (e.g. recognition timeout) now shows an explicit
-  // error instead of silently reverting to idle with nothing on screen.
   const subtitle =
     status === "listening"
       ? null
@@ -412,25 +217,174 @@ export default function Globe() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
 
-    let raf = 0;
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 50);
+    camera.position.set(0, 0.02, 4.7);
+    camera.lookAt(0, 0.05, 0);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setClearColor(0x000000, 0);
+
+    // Lighting — soft fill plus a cool key light and a warm rim, so the
+    // panels actually catch highlights as they rotate rather than reading
+    // as a flat silhouette.
+    scene.add(new THREE.HemisphereLight(0x8fd9ff, 0x0a0f1a, 0.55));
+    const key = new THREE.DirectionalLight(0x8fe0ff, 1.2);
+    key.position.set(1.6, 2.2, 2.4);
+    scene.add(key);
+    const rimLight = new THREE.PointLight(0x66eaff, 1.4, 8, 2);
+    rimLight.position.set(-1.8, 0.6, -1.6);
+    scene.add(rimLight);
+
+    const root = new THREE.Group();
+    scene.add(root);
+
+    const armorMat = new THREE.MeshPhysicalMaterial({
+      color: 0x123246,
+      emissive: HUE_HEX,
+      emissiveIntensity: 0.16,
+      metalness: 0.55,
+      roughness: 0.28,
+      transparent: true,
+      opacity: 0.62,
+      transmission: 0.05,
+      thickness: 0.3,
+      side: THREE.DoubleSide,
+    });
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: EDGE_HEX,
+      transparent: true,
+      opacity: 0.85,
+    });
+
+    interface PartHandle {
+      def: PartDef;
+      group: THREE.Group;
+      explodeDir: THREE.Vector3;
+      explodeScale: number;
+    }
+    const parts = new Map<string, PartHandle>();
+
+    PART_DEFS.forEach((def, i) => {
+      const geo = new RoundedBoxGeometry(def.half.x * 2, def.half.y * 2, def.half.z * 2, 3, PANEL_RADIUS);
+      const mesh = new THREE.Mesh(geo, armorMat);
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), edgeMat);
+      const group = new THREE.Group();
+      group.position.copy(def.center);
+      group.add(mesh, edges);
+      root.add(group);
+
+      const dir = def.center.clone().sub(CORE);
+      if (dir.lengthSq() < 1e-6) dir.set(0, 1, 0);
+      dir.normalize();
+
+      parts.set(def.id, { def, group, explodeDir: dir, explodeScale: 0.8 + hash(i + 900) * 0.4 });
+    });
+
+    const jointGeo = new THREE.TorusGeometry(0.034, 0.008, 8, 20);
+    const jointDotGeo = new THREE.SphereGeometry(0.015, 8, 8);
+    const jointMat = new THREE.MeshBasicMaterial({ color: EDGE_HEX, transparent: true, opacity: 0.9 });
+    JOINT_DEFS.forEach((jd) => {
+      const part = parts.get(jd.followPartId);
+      if (!part) return;
+      const local = jd.position.clone().sub(part.def.center);
+      const ring = new THREE.Mesh(jointGeo, jointMat);
+      ring.position.copy(local);
+      const dot = new THREE.Mesh(jointDotGeo, jointMat);
+      dot.position.copy(local);
+      part.group.add(ring, dot);
+    });
+
+    const eyeGeo = new THREE.SphereGeometry(0.014, 8, 8);
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xe6f9ff });
+    const jaw = parts.get("head_jaw");
+    if (jaw) {
+      EYE_DEFS.forEach((ep) => {
+        const eye = new THREE.Mesh(eyeGeo, eyeMat);
+        eye.position.copy(ep.clone().sub(jaw.def.center));
+        jaw.group.add(eye);
+      });
+    }
+
+    const chest = parts.get("chest");
+    let reactorLight: THREE.PointLight | null = null;
+    if (chest) {
+      const reactorLocal = new THREE.Vector3(0, 0, chest.def.half.z + 0.015);
+      const reactorMat = new THREE.MeshBasicMaterial({ color: REACTOR_HEX });
+      const core = new THREE.Mesh(new THREE.SphereGeometry(0.032, 12, 12), reactorMat);
+      core.position.copy(reactorLocal);
+      const ring1 = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.006, 8, 24), reactorMat);
+      ring1.position.copy(reactorLocal);
+      const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.005, 8, 24), reactorMat);
+      ring2.position.copy(reactorLocal);
+      chest.group.add(core, ring1, ring2);
+      reactorLight = new THREE.PointLight(REACTOR_HEX, 0.35, 1.1, 2);
+      reactorLight.position.copy(reactorLocal);
+      chest.group.add(reactorLight);
+    }
+
+    // Faint callout tethers from each part's rest position to its current
+    // (possibly exploded) position — root-space, one shared buffer.
+    const tetherPositions = new Float32Array(PART_DEFS.length * 2 * 3);
+    const tetherGeo = new THREE.BufferGeometry();
+    tetherGeo.setAttribute("position", new THREE.BufferAttribute(tetherPositions, 3));
+    const tetherMat = new THREE.LineBasicMaterial({ color: EDGE_HEX, transparent: true, opacity: 0 });
+    const tethers = new THREE.LineSegments(tetherGeo, tetherMat);
+    root.add(tethers);
+
+    // Soft ambient halo behind the figure so it reads as one glowing
+    // projection rather than a dozen separately-lit panels.
+    const haloSize = 128;
+    const haloCanvas = document.createElement("canvas");
+    haloCanvas.width = haloCanvas.height = haloSize;
+    const haloCtx = haloCanvas.getContext("2d");
+    if (haloCtx) {
+      const g = haloCtx.createRadialGradient(
+        haloSize / 2, haloSize / 2, 0, haloSize / 2, haloSize / 2, haloSize / 2
+      );
+      g.addColorStop(0, "rgba(120,220,255,0.28)");
+      g.addColorStop(1, "rgba(120,220,255,0)");
+      haloCtx.fillStyle = g;
+      haloCtx.fillRect(0, 0, haloSize, haloSize);
+    }
+    const haloTex = new THREE.CanvasTexture(haloCanvas);
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: haloTex,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.position.set(0, 0.2, -0.4);
+    halo.scale.set(2.7, 2.7, 1);
+    scene.add(halo);
+
+    // Bloom so the emissive bits (eyes, reactor, edge lines) actually
+    // glow instead of just being a flat bright color.
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.4, 0.4, 0.45);
+    composer.addPass(bloom);
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(rect.width * dpr);
-      canvas.height = Math.round(rect.height * dpr);
+      const w = Math.max(1, rect.width);
+      const h = Math.max(1, rect.height);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(w, h, false);
+      composer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
     };
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
 
+    let raf = 0;
     const draw = () => {
-      const w = canvas.width;
-      const h = canvas.height;
       const lvl = levelRef.current;
 
       // Slow constant drift so it's never fully static, plus whatever the
@@ -447,106 +401,53 @@ export default function Globe() {
       rotVelRef.current.y = rotVelRef.current.y * DAMPING + errY * STIFFNESS;
       rotRef.current.x += rotVelRef.current.x;
       rotRef.current.y += rotVelRef.current.y;
+      root.rotation.x = rotRef.current.x;
+      root.rotation.y = rotRef.current.y;
 
       explodeRef.current += (explodeTargetRef.current - explodeRef.current) * 0.06;
+      const explode = explodeRef.current;
 
-      ctx.clearRect(0, 0, w, h);
+      let ti = 0;
+      parts.forEach((p) => {
+        p.group.position
+          .copy(p.def.center)
+          .addScaledVector(p.explodeDir, explode * EXPLODE_DIST * p.explodeScale);
+        tetherPositions[ti++] = p.def.center.x;
+        tetherPositions[ti++] = p.def.center.y;
+        tetherPositions[ti++] = p.def.center.z;
+        tetherPositions[ti++] = p.group.position.x;
+        tetherPositions[ti++] = p.group.position.y;
+        tetherPositions[ti++] = p.group.position.z;
+      });
+      tetherGeo.attributes.position.needsUpdate = true;
+      tetherMat.opacity = 0.16 * Math.min(1, explode * 3);
 
-      const cosY = Math.cos(rotRef.current.y);
-      const sinY = Math.sin(rotRef.current.y);
-      const cosX = Math.cos(rotRef.current.x);
-      const sinX = Math.sin(rotRef.current.x);
+      armorMat.emissiveIntensity = 0.28 + lvl * 0.35;
+      if (reactorLight) reactorLight.intensity = (1.0 + lvl * 1.2) * (1 - explode * 0.5);
+      bloom.strength = 0.35 + lvl * 0.35;
+      root.scale.setScalar(1 + lvl * 0.02);
 
-      const centerX = w / 2;
-      const centerY = h / 2;
-      // Leaves headroom for parts to spread out on explode without
-      // running off-screen — full viewport, not a boxed widget.
-      const scale = Math.min(w, h) * 0.24 * (1 + lvl * 0.04);
-
-      // One soft ambient glow behind the whole figure rather than one per
-      // part — cheaper, and reads as a single holographic projection
-      // rather than a dozen separate glowing blobs.
-      const glowR = scale * (1.7 + explodeRef.current * 0.9);
-      const g = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowR);
-      g.addColorStop(0, `hsla(${HUE}, 90%, 65%, ${0.08 + lvl * 0.1})`);
-      g.addColorStop(1, `hsla(${HUE}, 90%, 65%, 0)`);
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, glowR, 0, Math.PI * 2);
-      ctx.fill();
-
-      for (const part of ARMOR) {
-        drawArmorPart(
-          ctx, part, explodeRef.current, cosY, sinY, cosX, sinX, scale, centerX, centerY, dpr
-        );
-      }
-      for (const joint of JOINTS) {
-        drawJoint(
-          ctx, joint, explodeRef.current, cosY, sinY, cosX, sinX, scale, centerX, centerY, dpr
-        );
-      }
-
-      // Glowing eye slits on the jaw plate — ride along with it during
-      // the explode, same as the joint markers.
-      const jawPart = ARMOR_BY_ID.get("head_jaw");
-      if (jawPart) {
-        const jawOffset = explodeOffset(jawPart, explodeRef.current);
-        const eyeAlpha = 0.65 + lvl * 0.3;
-        for (const eye of EYES) {
-          const p = project(
-            { x: eye.x + jawOffset.x, y: eye.y + jawOffset.y, z: eye.z + jawOffset.z },
-            cosY, sinY, cosX, sinX
-          );
-          ctx.beginPath();
-          ctx.fillStyle = `hsla(${HUE}, 100%, 85%, ${eyeAlpha})`;
-          ctx.arc(
-            centerX + p.x * scale, centerY - p.y * scale,
-            Math.max(1 * dpr, scale * 0.018), 0, Math.PI * 2
-          );
-          ctx.fill();
-        }
-      }
-
-      // A ringed "arc reactor" at the chest — rides along with the chest
-      // plate during explode, fading as it separates from center.
-      const chestPart = ARMOR_BY_ID.get("chest");
-      if (chestPart) {
-        const chestOffset = explodeOffset(chestPart, explodeRef.current);
-        const reactorPos: Vec3 = {
-          x: CORE.x + chestOffset.x,
-          y: CORE.y + chestOffset.y,
-          z: CORE.z + 0.22 + chestOffset.z,
-        };
-        const chestP = project(reactorPos, cosY, sinY, cosX, sinX);
-        const rx = centerX + chestP.x * scale;
-        const ry = centerY - chestP.y * scale;
-        const coreAlpha = (0.55 + lvl * 0.4) * (1 - explodeRef.current * 0.6);
-        const coreR = Math.max(1.5 * dpr, scale * 0.032);
-
-        ctx.beginPath();
-        ctx.strokeStyle = `hsla(${CORE_HUE}, 90%, 65%, ${coreAlpha * 0.8})`;
-        ctx.lineWidth = Math.max(0.8, 1 * dpr);
-        ctx.arc(rx, ry, coreR * 2.2, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.strokeStyle = `hsla(${CORE_HUE}, 95%, 72%, ${coreAlpha})`;
-        ctx.arc(rx, ry, coreR * 1.4, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.fillStyle = `hsla(${CORE_HUE}, 95%, 80%, ${coreAlpha})`;
-        ctx.arc(rx, ry, coreR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
+      composer.render();
       raf = requestAnimationFrame(draw);
     };
-
     raf = requestAnimationFrame(draw);
+
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      composer.dispose();
+      renderer.dispose();
+      haloTex.dispose();
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
+          obj.geometry.dispose();
+        }
+      });
+      armorMat.dispose();
+      edgeMat.dispose();
+      jointMat.dispose();
+      eyeMat.dispose();
+      tetherMat.dispose();
     };
   }, []);
 
