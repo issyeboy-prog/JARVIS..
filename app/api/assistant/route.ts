@@ -68,7 +68,17 @@ function getBedrockClient(): AnthropicBedrockMantle | null {
     return null;
   }
   if (!bedrockClient) {
-    bedrockClient = new AnthropicBedrockMantle({ awsRegion: process.env.AWS_REGION });
+    bedrockClient = new AnthropicBedrockMantle({
+      awsRegion: process.env.AWS_REGION,
+      // Defaults are a 10-minute timeout and 2 retries on 429/5xx/network
+      // errors — fine for a batch job, bad for a voice loop: a genuinely
+      // broken config (wrong model ID, missing model access, bad IAM
+      // permissions) would otherwise burn retry time before ever
+      // reaching the client-side fallback, making "misconfigured" look
+      // identical to "just slow." One retry, 12s ceiling.
+      timeout: 12_000,
+      maxRetries: 1,
+    });
   }
   return bedrockClient;
 }

@@ -11,7 +11,7 @@ const DOT_COLOR: Record<string, string> = {
 };
 
 export default function SystemStatusPanel() {
-  const { status, supported, lastTtsEngine } = useVoice();
+  const { status, supported, lastTtsEngine, lastAssistantEngine } = useVoice();
 
   const rows = [
     { label: "Voice engine", value: supported ? "Online" : "Unsupported" },
@@ -40,6 +40,19 @@ export default function SystemStatusPanel() {
           </li>
         ))}
       </ul>
+      {lastAssistantEngine && (
+        <div className="mt-1 border-t border-cyan-500/10 pt-2 text-xs">
+          <div className="flex items-center justify-between text-cyan-200/60">
+            <span>Last brain</span>
+            <span className={lastAssistantEngine.engine === "bedrock" ? "text-emerald-300" : "text-amber-300"}>
+              {lastAssistantEngine.engine === "bedrock" ? "Bedrock" : "Canned fallback"}
+            </span>
+          </div>
+          {lastAssistantEngine.engine === "fallback" && (
+            <p className="mt-1 text-cyan-200/40">Reason: {lastAssistantEngine.reason}</p>
+          )}
+        </div>
+      )}
       {lastTtsEngine && (
         <div className="mt-1 border-t border-cyan-500/10 pt-2 text-xs">
           <div className="flex items-center justify-between text-cyan-200/60">

@@ -18,7 +18,7 @@ import {
   startContinuousListening,
 } from "@/lib/speechRecognition";
 import { speak, type SpeakHandle, type TtsEngineReport } from "@/lib/tts";
-import { askAssistant } from "@/lib/assistant";
+import { askAssistant, type AssistantEngineReport } from "@/lib/assistant";
 import { buildBriefingContext } from "@/lib/briefingContext";
 import { resetAllPanels } from "@/lib/panelReset";
 
@@ -38,6 +38,10 @@ interface VoiceContextValue {
   // Which TTS engine actually produced the last response, and why it fell
   // back if it did — otherwise this failure mode is a total black box.
   lastTtsEngine: TtsEngineReport | null;
+  // Same idea for the assistant call itself — whether Bedrock actually
+  // answered or the reply is the dumb "I heard: X" canned fallback, and
+  // why, so that's diagnosable instead of looking like a dumb assistant.
+  lastAssistantEngine: AssistantEngineReport | null;
   lastError: string | null;
   supported: boolean;
   activate: () => Promise<void>;
@@ -76,6 +80,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [transcript, setTranscript] = useState("");
   const [lastResponse, setLastResponse] = useState("");
   const [lastTtsEngine, setLastTtsEngine] = useState<TtsEngineReport | null>(null);
+  const [lastAssistantEngine, setLastAssistantEngine] = useState<AssistantEngineReport | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
 
   const stopClapDetectorRef = useRef<(() => void) | null>(null);
@@ -203,7 +208,8 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         // asks for them — see buildBriefingContext — so a typical command
         // isn't stuck waiting on two network round trips it doesn't need.
         const context = await buildBriefingContext(heard);
-        const reply = await askAssistant(heard, context);
+        const { reply, report } = await askAssistant(heard, context);
+        setLastAssistantEngine(report);
         await speakReply(reply);
       }
     } catch (err) {
@@ -346,6 +352,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         transcript,
         lastResponse,
         lastTtsEngine,
+        lastAssistantEngine,
         lastError,
         supported,
         activate,

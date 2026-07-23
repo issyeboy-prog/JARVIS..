@@ -5,9 +5,14 @@ import {
   removeScheduleEventsByQuery,
 } from "./scheduleStore";
 
-// Falls back to a few canned responses if no ANTHROPIC_API_KEY is
+// Falls back to a few canned responses if the Bedrock-backed route isn't
 // configured yet, or the request fails for any reason — so voice control
-// still works end-to-end before the real brain is wired up.
+// still works end-to-end before the real brain is wired up. Previously
+// this fallback was completely silent (any failure just quietly returned
+// "I heard: X" with zero trace of why) — that's exactly what made a
+// broken assistant call indistinguishable from a working-but-dumb one.
+// AssistantEngineReport (below) exists so the caller can surface the real
+// reason instead.
 function cannedResponse(text: string): string {
   const t = text.toLowerCase();
   if (t.includes("time")) {
@@ -17,6 +22,15 @@ function cannedResponse(text: string): string {
     return "Hello. I'm listening.";
   }
   return `I heard: ${text}`;
+}
+
+export type AssistantEngineReport =
+  | { engine: "bedrock" }
+  | { engine: "fallback"; reason: string };
+
+export interface AskAssistantResult {
+  reply: string;
+  report: AssistantEngineReport;
 }
 
 interface ToolCall {
@@ -53,14 +67,26 @@ function executeTool(call: ToolCall): string {
   return `Unknown tool: ${call.name}`;
 }
 
-export async function askAssistant(text: string, context?: string): Promise<string> {
+// Reads the JSON error body a failed /api/assistant response, so the
+// fallback reason says *what* went wrong (missing config, a Bedrock
+// error, a bad HTTP status) instead of just "it didn't work."
+async function describeFailure(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null) as { error?: string; detail?: string } | null;
+  if (!body?.error) return `HTTP ${res.status}`;
+  return body.detail ? `${body.error}: ${body.detail}` : `${body.error} (HTTP ${res.status})`;
+}
+
+export async function askAssistant(text: string, context?: string): Promise<AskAssistantResult> {
   try {
     let res = await fetch("/api/assistant", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, context }),
     });
-    if (!res.ok) return cannedResponse(text);
+    if (!res.ok) {
+      const reason = await describeFailure(res);
+      return { reply: cannedResponse(text), report: { engine: "fallback", reason } };
+    }
     let data = (await res.json()) as AssistantResponse;
 
     // Claude may chain a couple of tool calls (e.g. remove one event, add
@@ -85,13 +111,20 @@ export async function askAssistant(text: string, context?: string): Promise<stri
           ],
         }),
       });
-      if (!res.ok) return cannedResponse(text);
+      if (!res.ok) {
+        const reason = await describeFailure(res);
+        return { reply: cannedResponse(text), report: { engine: "fallback", reason } };
+      }
       data = (await res.json()) as AssistantResponse;
     }
 
-    if (data.reply) return data.reply;
-  } catch {
-    // network error — fall through to the canned response below
+    if (data.reply) return { reply: data.reply, report: { engine: "bedrock" } };
+    return {
+      reply: cannedResponse(text),
+      report: { engine: "fallback", reason: "empty reply from assistant" },
+    };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { reply: cannedResponse(text), report: { engine: "fallback", reason } };
   }
-  return cannedResponse(text);
 }
