@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
+import { AnthropicBedrock } from "@anthropic-ai/bedrock-sdk";
 import type Anthropic from "@anthropic-ai/sdk";
 
 // Claude via Amazon Bedrock (AWS-billed) rather than a direct Anthropic key
-// — see AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION below. The bare
-// alias form ("anthropic.claude-haiku-4-5") 403'd as "not available for
-// this account"; the un-prefixed dated snapshot ID then 404'd as not
-// existing at all — a strong signal this model is only reachable through
-// a cross-region inference profile (the "us."-prefixed form Bedrock uses
-// for newer models instead of direct on-demand invocation). If this still
-// 404s, the exact ID needs to come from Bedrock's own "view code" export
-// in the console playground rather than guessing further.
+// — see AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION below.
+//
+// Using the plain AnthropicBedrock client (the standard bedrock-runtime
+// InvokeModel path), not AnthropicBedrockMantle — Mantle is a separate,
+// Anthropic-operated Bedrock endpoint with its own bare-alias model
+// naming ("anthropic.claude-haiku-4-5"), which 403'd as not available for
+// this account. This account's actual granted access shows up through
+// standard Bedrock — confirmed via `aws bedrock list-inference-profiles`
+// — as this exact cross-region inference profile ID, so the client needs
+// to be the one that speaks that API.
 const DEFAULT_MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 const SYSTEM_PROMPT = `You are JARVIS, a personal voice assistant running on someone's home dashboard.
@@ -67,13 +69,13 @@ interface ChatMessage {
 // standard AWS SDK env var names) automatically — only the region needs to
 // be passed explicitly here. One client instance is reused across requests
 // rather than rebuilt per call.
-let bedrockClient: AnthropicBedrockMantle | null = null;
-function getBedrockClient(): AnthropicBedrockMantle | null {
+let bedrockClient: AnthropicBedrock | null = null;
+function getBedrockClient(): AnthropicBedrock | null {
   if (!process.env.AWS_REGION || !process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
     return null;
   }
   if (!bedrockClient) {
-    bedrockClient = new AnthropicBedrockMantle({
+    bedrockClient = new AnthropicBedrock({
       awsRegion: process.env.AWS_REGION,
       // Defaults are a 10-minute timeout and 2 retries on 429/5xx/network
       // errors — fine for a batch job, bad for a voice loop: a genuinely
