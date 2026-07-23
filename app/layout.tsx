@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { VoiceProvider } from "@/contexts/VoiceContext";
 import RegisterServiceWorker from "@/components/RegisterServiceWorker";
+import PasswordGate from "@/components/PasswordGate";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -44,7 +45,9 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <RegisterServiceWorker />
         <div className="holo-scanlines" />
-        <VoiceProvider>{children}</VoiceProvider>
+        <PasswordGate>
+          <VoiceProvider>{children}</VoiceProvider>
+        </PasswordGate>
       </body>
     </html>
   );
