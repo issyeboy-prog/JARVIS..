@@ -99,6 +99,32 @@ const ARMOR: ArmorPart[] = ARMOR_PARTS.map((def, i) => ({
   explodeScale: 0.8 + hash(i + 900) * 0.4, // 0.8..1.2
   corners: boxCorners(def.center, def.half),
 }));
+const ARMOR_BY_ID = new Map(ARMOR.map((p) => [p.id, p]));
+
+// Small sensor-ring markers at the joints — shoulders, elbows, wrists,
+// hips, knees, ankles, neck — the scattered circular HUD readouts that
+// make a wireframe body read as "scanned tech" rather than a plain
+// mannequin. Each rides along with whichever limb segment it anchors to,
+// so it separates with that piece during the explode.
+interface JointDef {
+  position: Vec3;
+  followPartId: string;
+}
+const JOINTS: JointDef[] = [
+  { position: { x: 0, y: 0.98, z: 0 }, followPartId: "head" },
+  { position: { x: -0.5, y: 0.6, z: 0.02 }, followPartId: "armL_upper" },
+  { position: { x: 0.5, y: 0.6, z: 0.02 }, followPartId: "armR_upper" },
+  { position: { x: -0.55, y: 0.2, z: 0 }, followPartId: "armL_fore" },
+  { position: { x: 0.55, y: 0.2, z: 0 }, followPartId: "armR_fore" },
+  { position: { x: -0.57, y: -0.15, z: 0 }, followPartId: "armL_hand" },
+  { position: { x: 0.57, y: -0.15, z: 0 }, followPartId: "armR_hand" },
+  { position: { x: -0.18, y: -0.13, z: 0.02 }, followPartId: "legL_thigh" },
+  { position: { x: 0.18, y: -0.13, z: 0.02 }, followPartId: "legR_thigh" },
+  { position: { x: -0.18, y: -0.62, z: 0 }, followPartId: "legL_shin" },
+  { position: { x: 0.18, y: -0.62, z: 0 }, followPartId: "legR_shin" },
+  { position: { x: -0.18, y: -1.0, z: 0.05 }, followPartId: "legL_foot" },
+  { position: { x: 0.18, y: -1.0, z: 0.05 }, followPartId: "legR_foot" },
+];
 
 const HUE = 190; // cyan, matching the rest of the holographic UI
 const CORE_HUE = 42; // small warm "reactor" accent at the chest
@@ -124,6 +150,14 @@ function project(
 // body-space units.
 const EXPLODE_DIST = 0.62;
 
+function explodeOffset(part: ArmorPart, explode: number): Vec3 {
+  return {
+    x: part.explodeDir.x * explode * EXPLODE_DIST * part.explodeScale,
+    y: part.explodeDir.y * explode * EXPLODE_DIST * part.explodeScale,
+    z: part.explodeDir.z * explode * EXPLODE_DIST * part.explodeScale,
+  };
+}
+
 function drawArmorPart(
   ctx: CanvasRenderingContext2D,
   part: ArmorPart,
@@ -137,11 +171,7 @@ function drawArmorPart(
   cy: number,
   dpr: number
 ) {
-  const offset: Vec3 = {
-    x: part.explodeDir.x * explode * EXPLODE_DIST * part.explodeScale,
-    y: part.explodeDir.y * explode * EXPLODE_DIST * part.explodeScale,
-    z: part.explodeDir.z * explode * EXPLODE_DIST * part.explodeScale,
-  };
+  const offset = explodeOffset(part, explode);
 
   // A faint tether from the assembled position to the exploded one — the
   // callout-line look of an exploded diagram, only visible mid-transition.
@@ -178,6 +208,70 @@ function drawArmorPart(
     ctx.lineTo(cx + pb.x * scale, cy - pb.y * scale);
     ctx.stroke();
   }
+
+  // Circuit-panel lines across the chest plate's front face (corners
+  // 2/3 bottom-front, 6/7 top-front — see boxCorners' ordering) — an X
+  // and a midline, the "scanned tech" detailing from the reference.
+  // Fades as the chest separates during explode so it doesn't read as a
+  // flat decal floating mid-air.
+  if (part.id === "chest") {
+    const panelAlpha = Math.max(0.04, 0.22 * (1 - explode * 0.8));
+    ctx.strokeStyle = `hsla(${HUE}, 90%, 78%, ${panelAlpha})`;
+    ctx.lineWidth = Math.max(0.5, 0.6 * dpr);
+    ctx.beginPath();
+    ctx.moveTo(cx + projected[3].x * scale, cy - projected[3].y * scale);
+    ctx.lineTo(cx + projected[6].x * scale, cy - projected[6].y * scale);
+    ctx.moveTo(cx + projected[2].x * scale, cy - projected[2].y * scale);
+    ctx.lineTo(cx + projected[7].x * scale, cy - projected[7].y * scale);
+    const midBottom = {
+      x: (projected[2].x + projected[3].x) / 2,
+      y: (projected[2].y + projected[3].y) / 2,
+    };
+    const midTop = {
+      x: (projected[6].x + projected[7].x) / 2,
+      y: (projected[6].y + projected[7].y) / 2,
+    };
+    ctx.moveTo(cx + midBottom.x * scale, cy - midBottom.y * scale);
+    ctx.lineTo(cx + midTop.x * scale, cy - midTop.y * scale);
+    ctx.stroke();
+  }
+}
+
+function drawJoint(
+  ctx: CanvasRenderingContext2D,
+  joint: JointDef,
+  explode: number,
+  cosY: number,
+  sinY: number,
+  cosX: number,
+  sinX: number,
+  scale: number,
+  cx: number,
+  cy: number,
+  dpr: number
+) {
+  const part = ARMOR_BY_ID.get(joint.followPartId);
+  if (!part) return;
+  const offset = explodeOffset(part, explode);
+  const p = project(
+    { x: joint.position.x + offset.x, y: joint.position.y + offset.y, z: joint.position.z + offset.z },
+    cosY, sinY, cosX, sinX
+  );
+  const px = cx + p.x * scale;
+  const py = cy - p.y * scale;
+  const alpha = 0.35 + Math.max(0, (p.z + 1) / 2) * 0.5;
+  const r = Math.max(2 * dpr, scale * 0.026);
+
+  ctx.beginPath();
+  ctx.strokeStyle = `hsla(${HUE}, 95%, 78%, ${alpha})`;
+  ctx.lineWidth = Math.max(0.6, 0.8 * dpr);
+  ctx.arc(px, py, r, 0, Math.PI * 2);
+  ctx.stroke();
+  // A tiny filled center so it reads as a sensor/rivet, not just a ring.
+  ctx.beginPath();
+  ctx.fillStyle = `hsla(${HUE}, 95%, 85%, ${alpha * 0.7})`;
+  ctx.arc(px, py, r * 0.28, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 // --- Component -----------------------------------------------------------
@@ -368,6 +462,11 @@ export default function Globe() {
       for (const part of ARMOR) {
         drawArmorPart(
           ctx, part, explodeRef.current, cosY, sinY, cosX, sinX, scale, centerX, centerY, dpr
+        );
+      }
+      for (const joint of JOINTS) {
+        drawJoint(
+          ctx, joint, explodeRef.current, cosY, sinY, cosX, sinX, scale, centerX, centerY, dpr
         );
       }
 
