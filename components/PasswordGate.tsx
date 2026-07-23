@@ -3,22 +3,6 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { isSpeechRecognitionSupported, listenOnce } from "@/lib/speechRecognition";
 
-const STORAGE_KEY = "jarvis.gateUnlocked";
-
-// The httpOnly cookie set by /api/gate is what actually protects the API
-// routes (see middleware.ts) — this localStorage flag only decides whether
-// to show the dashboard or the lock screen on this device. Mirrors the
-// cookie's lifetime in the common case; there's no reconciliation beyond
-// that, which is fine for a casual-visitor deterrent, not a hard security
-// boundary.
-function readUnlocked(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function subscribe() {
   return () => {};
 }
@@ -26,13 +10,11 @@ function subscribe() {
 type Phase = "idle" | "listening" | "verifying" | "denied";
 
 export default function PasswordGate({ children }: { children: React.ReactNode }) {
-  // Same getServerSnapshot escape hatch used elsewhere in this app
-  // (VoiceContext's `supported`, NotesPanel, ScheduleStore) — localStorage
-  // doesn't exist on the server, so the first client render has to start
-  // from the same "locked" assumption the server rendered.
-  const [unlockedOverride, setUnlockedOverride] = useState(false);
-  const storedUnlocked = useSyncExternalStore(subscribe, readUnlocked, () => false);
-  const unlocked = storedUnlocked || unlockedOverride;
+  // Deliberately not persisted anywhere (no localStorage, no long-lived
+  // cookie) — same "every reopen starts fresh" behavior as the display
+  // reset: this state lives only for as long as this component instance
+  // does, so a full page reload always re-mounts locked.
+  const [unlocked, setUnlocked] = useState(false);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [typedPhrase, setTypedPhrase] = useState("");
@@ -50,12 +32,7 @@ export default function PasswordGate({ children }: { children: React.ReactNode }
         setPhase("denied");
         return;
       }
-      try {
-        localStorage.setItem(STORAGE_KEY, "1");
-      } catch {
-        // storage unavailable — fall back to the in-memory override below
-      }
-      setUnlockedOverride(true);
+      setUnlocked(true);
     } catch {
       setPhase("denied");
     }
