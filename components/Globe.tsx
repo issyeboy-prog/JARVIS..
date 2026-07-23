@@ -39,28 +39,44 @@ interface ArmorPartDef {
   half: Vec3; // box half-extents
 }
 
-// Roughly: head, chest, abdomen, then paired left/right arm (upper/fore/
-// hand) and leg (thigh/shin/foot) segments — enough pieces to read as
-// armor without being expensive to draw at 60fps in a 2D canvas.
+// Roughly: head, chest, abdomen, then paired left/right arm (shoulder/
+// upper/fore/hand) and leg (thigh/shin/foot) segments — enough pieces to
+// read as armor without being expensive to draw at 60fps in a 2D canvas.
+// Proportions deliberately lean toward the familiar "armored hero"
+// silhouette — broad pauldron shoulders, a jaw/faceplate split on the
+// helmet, chunky gauntlets and boots — this is an original wireframe
+// design in that general style, not a reproduction of any specific
+// licensed character model.
 const CORE: Vec3 = { x: 0, y: 0.45, z: 0 };
 const ARMOR_PARTS: ArmorPartDef[] = [
-  { id: "head", center: { x: 0, y: 1.15, z: 0 }, half: { x: 0.16, y: 0.19, z: 0.17 } },
+  { id: "head_dome", center: { x: 0, y: 1.22, z: 0 }, half: { x: 0.145, y: 0.12, z: 0.145 } },
+  { id: "head_jaw", center: { x: 0, y: 1.03, z: 0.02 }, half: { x: 0.12, y: 0.09, z: 0.155 } },
   { id: "chest", center: { x: 0, y: 0.62, z: 0 }, half: { x: 0.36, y: 0.4, z: 0.24 } },
   { id: "abdomen", center: { x: 0, y: 0.14, z: 0 }, half: { x: 0.27, y: 0.18, z: 0.2 } },
 
+  { id: "shoulderL", center: { x: -0.5, y: 0.74, z: 0.01 }, half: { x: 0.155, y: 0.11, z: 0.14 } },
   { id: "armL_upper", center: { x: -0.52, y: 0.42, z: 0 }, half: { x: 0.1, y: 0.22, z: 0.11 } },
   { id: "armL_fore", center: { x: -0.56, y: 0.02, z: 0 }, half: { x: 0.085, y: 0.19, z: 0.095 } },
-  { id: "armL_hand", center: { x: -0.58, y: -0.28, z: 0 }, half: { x: 0.075, y: 0.09, z: 0.08 } },
+  { id: "armL_hand", center: { x: -0.58, y: -0.28, z: 0 }, half: { x: 0.09, y: 0.1, z: 0.09 } },
+  { id: "shoulderR", center: { x: 0.5, y: 0.74, z: 0.01 }, half: { x: 0.155, y: 0.11, z: 0.14 } },
   { id: "armR_upper", center: { x: 0.52, y: 0.42, z: 0 }, half: { x: 0.1, y: 0.22, z: 0.11 } },
   { id: "armR_fore", center: { x: 0.56, y: 0.02, z: 0 }, half: { x: 0.085, y: 0.19, z: 0.095 } },
-  { id: "armR_hand", center: { x: 0.58, y: -0.28, z: 0 }, half: { x: 0.075, y: 0.09, z: 0.08 } },
+  { id: "armR_hand", center: { x: 0.58, y: -0.28, z: 0 }, half: { x: 0.09, y: 0.1, z: 0.09 } },
 
   { id: "legL_thigh", center: { x: -0.18, y: -0.38, z: 0 }, half: { x: 0.14, y: 0.26, z: 0.15 } },
   { id: "legL_shin", center: { x: -0.18, y: -0.85, z: 0 }, half: { x: 0.11, y: 0.24, z: 0.12 } },
-  { id: "legL_foot", center: { x: -0.18, y: -1.14, z: 0.06 }, half: { x: 0.1, y: 0.06, z: 0.17 } },
+  { id: "legL_foot", center: { x: -0.18, y: -1.15, z: 0.06 }, half: { x: 0.12, y: 0.07, z: 0.19 } },
   { id: "legR_thigh", center: { x: 0.18, y: -0.38, z: 0 }, half: { x: 0.14, y: 0.26, z: 0.15 } },
   { id: "legR_shin", center: { x: 0.18, y: -0.85, z: 0 }, half: { x: 0.11, y: 0.24, z: 0.12 } },
-  { id: "legR_foot", center: { x: 0.18, y: -1.14, z: 0.06 }, half: { x: 0.1, y: 0.06, z: 0.17 } },
+  { id: "legR_foot", center: { x: 0.18, y: -1.15, z: 0.06 }, half: { x: 0.12, y: 0.07, z: 0.19 } },
+];
+
+// A couple of bright glowing points on the jaw plate for the "eye slit"
+// look — not armor boxes, just small lit dots that ride along with the
+// jaw piece during the explode.
+const EYES: Vec3[] = [
+  { x: -0.055, y: 1.05, z: 0.16 },
+  { x: 0.055, y: 1.05, z: 0.16 },
 ];
 
 function hash(i: number): number {
@@ -111,9 +127,9 @@ interface JointDef {
   followPartId: string;
 }
 const JOINTS: JointDef[] = [
-  { position: { x: 0, y: 0.98, z: 0 }, followPartId: "head" },
-  { position: { x: -0.5, y: 0.6, z: 0.02 }, followPartId: "armL_upper" },
-  { position: { x: 0.5, y: 0.6, z: 0.02 }, followPartId: "armR_upper" },
+  { position: { x: 0, y: 0.96, z: 0.03 }, followPartId: "head_jaw" },
+  { position: { x: -0.5, y: 0.6, z: 0.02 }, followPartId: "shoulderL" },
+  { position: { x: 0.5, y: 0.6, z: 0.02 }, followPartId: "shoulderR" },
   { position: { x: -0.55, y: 0.2, z: 0 }, followPartId: "armL_fore" },
   { position: { x: 0.55, y: 0.2, z: 0 }, followPartId: "armR_fore" },
   { position: { x: -0.57, y: -0.15, z: 0 }, followPartId: "armL_hand" },
@@ -470,27 +486,59 @@ export default function Globe() {
         );
       }
 
-      // A small pulsing "reactor" core at the chest — fades out once the
-      // chest plate has moved away from center during the explode.
-      const chestP = project(
-        {
-          x: CORE.x,
-          y: CORE.y,
-          z: CORE.z + 0.2,
-        },
-        cosY, sinY, cosX, sinX
-      );
-      const coreAlpha = (0.5 + lvl * 0.4) * (1 - explodeRef.current * 0.7);
-      ctx.beginPath();
-      ctx.fillStyle = `hsla(${CORE_HUE}, 95%, 70%, ${coreAlpha})`;
-      ctx.arc(
-        centerX + chestP.x * scale,
-        centerY - chestP.y * scale,
-        Math.max(1.5 * dpr, scale * 0.035),
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
+      // Glowing eye slits on the jaw plate — ride along with it during
+      // the explode, same as the joint markers.
+      const jawPart = ARMOR_BY_ID.get("head_jaw");
+      if (jawPart) {
+        const jawOffset = explodeOffset(jawPart, explodeRef.current);
+        const eyeAlpha = 0.65 + lvl * 0.3;
+        for (const eye of EYES) {
+          const p = project(
+            { x: eye.x + jawOffset.x, y: eye.y + jawOffset.y, z: eye.z + jawOffset.z },
+            cosY, sinY, cosX, sinX
+          );
+          ctx.beginPath();
+          ctx.fillStyle = `hsla(${HUE}, 100%, 85%, ${eyeAlpha})`;
+          ctx.arc(
+            centerX + p.x * scale, centerY - p.y * scale,
+            Math.max(1 * dpr, scale * 0.018), 0, Math.PI * 2
+          );
+          ctx.fill();
+        }
+      }
+
+      // A ringed "arc reactor" at the chest — rides along with the chest
+      // plate during explode, fading as it separates from center.
+      const chestPart = ARMOR_BY_ID.get("chest");
+      if (chestPart) {
+        const chestOffset = explodeOffset(chestPart, explodeRef.current);
+        const reactorPos: Vec3 = {
+          x: CORE.x + chestOffset.x,
+          y: CORE.y + chestOffset.y,
+          z: CORE.z + 0.22 + chestOffset.z,
+        };
+        const chestP = project(reactorPos, cosY, sinY, cosX, sinX);
+        const rx = centerX + chestP.x * scale;
+        const ry = centerY - chestP.y * scale;
+        const coreAlpha = (0.55 + lvl * 0.4) * (1 - explodeRef.current * 0.6);
+        const coreR = Math.max(1.5 * dpr, scale * 0.032);
+
+        ctx.beginPath();
+        ctx.strokeStyle = `hsla(${CORE_HUE}, 90%, 65%, ${coreAlpha * 0.8})`;
+        ctx.lineWidth = Math.max(0.8, 1 * dpr);
+        ctx.arc(rx, ry, coreR * 2.2, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.strokeStyle = `hsla(${CORE_HUE}, 95%, 72%, ${coreAlpha})`;
+        ctx.arc(rx, ry, coreR * 1.4, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.fillStyle = `hsla(${CORE_HUE}, 95%, 80%, ${coreAlpha})`;
+        ctx.arc(rx, ry, coreR, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       raf = requestAnimationFrame(draw);
     };
