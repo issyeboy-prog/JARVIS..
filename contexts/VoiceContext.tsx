@@ -199,10 +199,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
         // Live data (schedule, weather, news, date/time, quote/word) so
         // JARVIS can actually answer "give me a daily briefing" — or any
         // question touching this stuff — with real specifics instead of
-        // guessing. Cheap fields resolve instantly; weather/news have a
-        // short timeout and are just omitted if they don't come back in
-        // time.
-        const context = await buildBriefingContext();
+        // guessing. Weather/news are only fetched when heard actually
+        // asks for them — see buildBriefingContext — so a typical command
+        // isn't stuck waiting on two network round trips it doesn't need.
+        const context = await buildBriefingContext(heard);
         const reply = await askAssistant(heard, context);
         await speakReply(reply);
       }

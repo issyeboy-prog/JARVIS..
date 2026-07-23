@@ -30,68 +30,102 @@ export async function speak(
   opts: SpeakOptions = {}
 ): Promise<SpeakHandle> {
   const { onLevel, onEnd, onEngine } = opts;
-  let fallbackReason = "unknown error";
 
   try {
-    const res = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-
-    if (res.ok) {
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const audioEl = new Audio(url);
-      // Defensive — rule out the audio element silently starting muted
-      // or at zero volume for any reason.
-      audioEl.muted = false;
-      audioEl.volume = 1;
-      const analyser = createElementAnalyser(audioEl);
-      const buffer = new Uint8Array(new ArrayBuffer(analyser.fftSize));
-      let raf = 0;
-      let stopped = false;
-
-      const tick = () => {
-        if (stopped) return;
-        onLevel?.(getLevel(analyser, buffer));
-        raf = requestAnimationFrame(tick);
-      };
-
-      // Shared by natural completion and manual stop() so onEnd always
-      // fires exactly once either way — callers (like an interrupt
-      // triggered mid-sentence by the wake word) await onEnd to know
-      // playback has actually finished, not just that pause() was called.
-      const finish = () => {
-        if (stopped) return;
-        stopped = true;
-        cancelAnimationFrame(raf);
-        URL.revokeObjectURL(url);
-        onLevel?.(0);
-        onEnd?.();
-      };
-
-      audioEl.addEventListener("ended", finish);
-
-      await audioEl.play();
-      onEngine?.({ engine: "elevenlabs" });
-      tick();
-
-      return {
-        stop: () => {
-          audioEl.pause();
-          finish();
-        },
-      };
-    }
-    fallbackReason = `server responded ${res.status}`;
+    const handle = await speakWithElevenLabs(text, { onLevel, onEnd });
+    onEngine?.({ engine: "elevenlabs" });
+    return handle;
   } catch (err) {
-    // Network error, play() rejection (e.g. autoplay policy), etc.
-    fallbackReason = err instanceof Error ? err.message : String(err);
+    const fallbackReason = err instanceof Error ? err.message : String(err);
+    onEngine?.({ engine: "browser", reason: fallbackReason });
+    return speakWithBrowserVoice(text, { onLevel, onEnd });
   }
+}
 
-  onEngine?.({ engine: "browser", reason: fallbackReason });
-  return speakWithBrowserVoice(text, { onLevel, onEnd });
+// Points the <audio> element straight at /api/tts and lets the browser
+// stream + start playing as soon as enough of the response has buffered
+// (the "canplay" event), instead of the previous fetch()-the-whole-blob-
+// first approach — for anything longer than a short reply that was adding
+// real, avoidable seconds before any sound came out.
+function speakWithElevenLabs(
+  text: string,
+  { onLevel, onEnd }: Pick<SpeakOptions, "onLevel" | "onEnd">
+): Promise<SpeakHandle> {
+  return new Promise((resolve, reject) => {
+    const audioEl = new Audio();
+    // Defensive — rule out the audio element silently starting muted or
+    // at zero volume for any reason.
+    audioEl.muted = false;
+    audioEl.volume = 1;
+
+    let settled = false; // outer promise resolved/rejected yet?
+    let stopped = false;
+    let raf = 0;
+    let analyser: AnalyserNode | null = null;
+    let buffer: Uint8Array<ArrayBuffer> | null = null;
+
+    const tick = () => {
+      if (stopped || !analyser || !buffer) return;
+      onLevel?.(getLevel(analyser, buffer));
+      raf = requestAnimationFrame(tick);
+    };
+
+    // Shared by natural completion and manual stop() so onEnd always
+    // fires exactly once either way — callers (like an interrupt
+    // triggered mid-sentence by the wake word) await onEnd to know
+    // playback has actually finished, not just that pause() was called.
+    const finish = () => {
+      if (stopped) return;
+      stopped = true;
+      cancelAnimationFrame(raf);
+      onLevel?.(0);
+      onEnd?.();
+    };
+
+    const cleanupListeners = () => {
+      audioEl.removeEventListener("canplay", onCanPlay);
+      audioEl.removeEventListener("error", onError);
+    };
+
+    function onError() {
+      if (settled) {
+        // Already committed to this engine (playback had started) and it
+        // failed mid-stream — nowhere left to fall back to, just stop.
+        finish();
+        return;
+      }
+      settled = true;
+      cleanupListeners();
+      reject(new Error("elevenlabs-playback-error"));
+    }
+
+    async function onCanPlay() {
+      if (settled) return;
+      settled = true;
+      cleanupListeners();
+      try {
+        analyser = createElementAnalyser(audioEl);
+        buffer = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+        audioEl.addEventListener("ended", finish);
+        await audioEl.play();
+        tick();
+        resolve({
+          stop: () => {
+            audioEl.pause();
+            finish();
+          },
+        });
+      } catch (err) {
+        finish();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+
+    audioEl.addEventListener("canplay", onCanPlay);
+    audioEl.addEventListener("error", onError);
+    audioEl.src = `/api/tts?text=${encodeURIComponent(text)}`;
+    audioEl.load();
+  });
 }
 
 function speakWithBrowserVoice(

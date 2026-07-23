@@ -4,12 +4,16 @@ import { getTodaysQuote, getTodaysWord } from "./dailyContent";
 import { readSchedule } from "./scheduleStore";
 
 // Gathers everything JARVIS needs to answer things like "give me a daily
-// briefing" with real data instead of guessing. Sent alongside every voice
-// command (not just briefing requests) so it can also answer one-off
-// questions like "what's on my schedule" accurately — cheap/instant
-// sources are always included; weather and news are fetched with a short
-// timeout and simply omitted from the context if they don't come back in
-// time, rather than blocking the response.
+// briefing" with real data instead of guessing, or one-off questions like
+// "what's on my schedule" — cheap/instant sources (date, time, schedule,
+// quote/word of the day) are always included. Weather and news are the
+// slow part (geolocation + two network round trips), so they're only
+// fetched when the heard text actually seems to need them — paying that
+// latency on every single command, even "hello" or "add an event", was
+// the single biggest hit to response time.
+const WEATHER_RE = /\b(weather|temperature|forecast|rain|snow|hot|cold|degrees|sunny|cloudy|humid|outside)\b/i;
+const NEWS_RE = /\b(news|headline|happening|world events?)\b/i;
+const BRIEFING_RE = /\b(briefing|brief|rundown|catch me up|summary of (the day|today))\b/i;
 
 const FALLBACK_COORDS = { latitude: 40.7128, longitude: -74.006 };
 const WEATHER_CODE_LABEL: Record<number, string> = {
@@ -83,9 +87,14 @@ async function getNewsLines(): Promise<string[]> {
   }
 }
 
-export async function buildBriefingContext(): Promise<string> {
+export async function buildBriefingContext(heard: string): Promise<string> {
   const now = new Date();
-  const [weatherLine, newsLines] = await Promise.all([getWeatherLine(), getNewsLines()]);
+  const needsWeather = BRIEFING_RE.test(heard) || WEATHER_RE.test(heard);
+  const needsNews = BRIEFING_RE.test(heard) || NEWS_RE.test(heard);
+  const [weatherLine, newsLines] = await Promise.all([
+    needsWeather ? getWeatherLine() : Promise.resolve(null),
+    needsNews ? getNewsLines() : Promise.resolve([]),
+  ]);
   const quote = getTodaysQuote();
   const word = getTodaysWord();
   const events = readSchedule();
@@ -98,13 +107,18 @@ export async function buildBriefingContext(): Promise<string> {
       year: "numeric",
     })}`,
     `Current time: ${now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`,
-    `Weather: ${weatherLine ?? "unavailable"}`,
+    // Omitted entirely (not "unavailable") when not fetched — nothing for
+    // the model to second-guess mentioning on a question that never
+    // touched weather/news in the first place.
+    ...(needsWeather ? [`Weather: ${weatherLine ?? "unavailable"}`] : []),
     `Today's schedule: ${
       events.length
         ? events.map((e) => `${e.time} ${e.title}`).join("; ")
         : "nothing scheduled"
     }`,
-    `Top news headlines: ${newsLines.length ? newsLines.join(" | ") : "unavailable"}`,
+    ...(needsNews
+      ? [`Top news headlines: ${newsLines.length ? newsLines.join(" | ") : "unavailable"}`]
+      : []),
     `Quote of the day: "${quote.text}" — ${quote.author}`,
     `Word of the day: ${word.word} — ${word.definition}`,
   ];

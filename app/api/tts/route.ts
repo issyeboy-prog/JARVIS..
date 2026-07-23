@@ -4,7 +4,11 @@ import { NextRequest, NextResponse } from "next/server";
 // browser bundle or be visible in devtools network requests.
 const DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB"; // "Adam" stock voice
 
-export async function POST(request: NextRequest) {
+// GET (not POST) so the client can point an <audio> element's src straight
+// at this URL and let the browser stream + play progressively as bytes
+// arrive, instead of fetching the whole file into a blob first — see
+// lib/tts.ts. `text` travels as a query param since <audio> can only GET.
+export async function GET(request: NextRequest) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -13,15 +17,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { text } = (await request.json()) as { text?: string };
+  const text = request.nextUrl.searchParams.get("text");
   if (!text || !text.trim()) {
     return NextResponse.json({ error: "missing-text" }, { status: 400 });
   }
 
   const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
 
+  // The /stream endpoint (vs. the plain synthesis one) starts returning
+  // audio bytes as soon as the first chunk is ready rather than waiting
+  // for the whole clip — combined with eleven_flash_v2_5 (ElevenLabs'
+  // lowest-latency model), this is what actually gets sound out sooner.
   const upstream = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
     {
       method: "POST",
       headers: {
@@ -31,7 +39,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         text,
-        model_id: "eleven_turbo_v2_5",
+        model_id: "eleven_flash_v2_5",
         voice_settings: { stability: 0.5, similarity_boost: 0.75 },
       }),
     }
