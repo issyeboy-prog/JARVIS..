@@ -25,35 +25,46 @@ import {
 // driven by actual Object3D transforms rather than manual per-frame
 // projection math.
 
-interface PartDef {
-  id: string;
-  center: THREE.Vector3;
-  half: THREE.Vector3;
-}
+// Three part shapes instead of one flat "box for everything" — that
+// uniformity was the biggest source of the "crappy blocks" look. Limbs
+// taper (cylinders with different top/bottom radii — a box physically
+// can't do this), shoulders/helmet crown are domed (spheres), and only
+// the genuinely flat-plate parts (chest, abdomen, jaw, boots) stay boxes.
+type PartDef =
+  | { id: string; shape: "box"; center: THREE.Vector3; half: THREE.Vector3 }
+  | {
+      id: string;
+      shape: "taper";
+      center: THREE.Vector3;
+      radiusTop: number;
+      radiusBottom: number;
+      height: number;
+    }
+  | { id: string; shape: "dome"; center: THREE.Vector3; radius: number; squash: number };
 
 const CORE = new THREE.Vector3(0, 0.45, 0);
 
 const PART_DEFS: PartDef[] = [
-  { id: "head_dome", center: new THREE.Vector3(0, 1.22, 0), half: new THREE.Vector3(0.145, 0.12, 0.145) },
-  { id: "head_jaw", center: new THREE.Vector3(0, 1.03, 0.02), half: new THREE.Vector3(0.12, 0.09, 0.155) },
-  { id: "chest", center: new THREE.Vector3(0, 0.62, 0), half: new THREE.Vector3(0.36, 0.4, 0.24) },
-  { id: "abdomen", center: new THREE.Vector3(0, 0.14, 0), half: new THREE.Vector3(0.27, 0.18, 0.2) },
+  { id: "head_dome", shape: "dome", center: new THREE.Vector3(0, 1.22, 0), radius: 0.15, squash: 0.82 },
+  { id: "head_jaw", shape: "box", center: new THREE.Vector3(0, 1.03, 0.02), half: new THREE.Vector3(0.12, 0.09, 0.155) },
+  { id: "chest", shape: "box", center: new THREE.Vector3(0, 0.62, 0), half: new THREE.Vector3(0.36, 0.4, 0.24) },
+  { id: "abdomen", shape: "box", center: new THREE.Vector3(0, 0.14, 0), half: new THREE.Vector3(0.27, 0.18, 0.2) },
 
-  { id: "shoulderL", center: new THREE.Vector3(-0.5, 0.74, 0.01), half: new THREE.Vector3(0.155, 0.11, 0.14) },
-  { id: "armL_upper", center: new THREE.Vector3(-0.52, 0.42, 0), half: new THREE.Vector3(0.1, 0.22, 0.11) },
-  { id: "armL_fore", center: new THREE.Vector3(-0.56, 0.02, 0), half: new THREE.Vector3(0.085, 0.19, 0.095) },
-  { id: "armL_hand", center: new THREE.Vector3(-0.58, -0.28, 0), half: new THREE.Vector3(0.09, 0.1, 0.09) },
-  { id: "shoulderR", center: new THREE.Vector3(0.5, 0.74, 0.01), half: new THREE.Vector3(0.155, 0.11, 0.14) },
-  { id: "armR_upper", center: new THREE.Vector3(0.52, 0.42, 0), half: new THREE.Vector3(0.1, 0.22, 0.11) },
-  { id: "armR_fore", center: new THREE.Vector3(0.56, 0.02, 0), half: new THREE.Vector3(0.085, 0.19, 0.095) },
-  { id: "armR_hand", center: new THREE.Vector3(0.58, -0.28, 0), half: new THREE.Vector3(0.09, 0.1, 0.09) },
+  { id: "shoulderL", shape: "dome", center: new THREE.Vector3(-0.5, 0.74, 0.01), radius: 0.16, squash: 0.75 },
+  { id: "armL_upper", shape: "taper", center: new THREE.Vector3(-0.52, 0.42, 0), radiusTop: 0.115, radiusBottom: 0.08, height: 0.44 },
+  { id: "armL_fore", shape: "taper", center: new THREE.Vector3(-0.56, 0.02, 0), radiusTop: 0.09, radiusBottom: 0.07, height: 0.38 },
+  { id: "armL_hand", shape: "taper", center: new THREE.Vector3(-0.58, -0.28, 0), radiusTop: 0.065, radiusBottom: 0.095, height: 0.2 },
+  { id: "shoulderR", shape: "dome", center: new THREE.Vector3(0.5, 0.74, 0.01), radius: 0.16, squash: 0.75 },
+  { id: "armR_upper", shape: "taper", center: new THREE.Vector3(0.52, 0.42, 0), radiusTop: 0.115, radiusBottom: 0.08, height: 0.44 },
+  { id: "armR_fore", shape: "taper", center: new THREE.Vector3(0.56, 0.02, 0), radiusTop: 0.09, radiusBottom: 0.07, height: 0.38 },
+  { id: "armR_hand", shape: "taper", center: new THREE.Vector3(0.58, -0.28, 0), radiusTop: 0.065, radiusBottom: 0.095, height: 0.2 },
 
-  { id: "legL_thigh", center: new THREE.Vector3(-0.18, -0.38, 0), half: new THREE.Vector3(0.14, 0.26, 0.15) },
-  { id: "legL_shin", center: new THREE.Vector3(-0.18, -0.85, 0), half: new THREE.Vector3(0.11, 0.24, 0.12) },
-  { id: "legL_foot", center: new THREE.Vector3(-0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
-  { id: "legR_thigh", center: new THREE.Vector3(0.18, -0.38, 0), half: new THREE.Vector3(0.14, 0.26, 0.15) },
-  { id: "legR_shin", center: new THREE.Vector3(0.18, -0.85, 0), half: new THREE.Vector3(0.11, 0.24, 0.12) },
-  { id: "legR_foot", center: new THREE.Vector3(0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
+  { id: "legL_thigh", shape: "taper", center: new THREE.Vector3(-0.18, -0.38, 0), radiusTop: 0.16, radiusBottom: 0.11, height: 0.52 },
+  { id: "legL_shin", shape: "taper", center: new THREE.Vector3(-0.18, -0.85, 0), radiusTop: 0.115, radiusBottom: 0.095, height: 0.48 },
+  { id: "legL_foot", shape: "box", center: new THREE.Vector3(-0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
+  { id: "legR_thigh", shape: "taper", center: new THREE.Vector3(0.18, -0.38, 0), radiusTop: 0.16, radiusBottom: 0.11, height: 0.52 },
+  { id: "legR_shin", shape: "taper", center: new THREE.Vector3(0.18, -0.85, 0), radiusTop: 0.115, radiusBottom: 0.095, height: 0.48 },
+  { id: "legR_foot", shape: "box", center: new THREE.Vector3(0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
 ];
 
 interface JointDef {
@@ -245,10 +256,12 @@ export default function Globe() {
       emissive: HUE_HEX,
       emissiveIntensity: 0.16,
       metalness: 0.55,
-      roughness: 0.28,
+      roughness: 0.25,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.25,
       transparent: true,
-      opacity: 0.62,
-      transmission: 0.05,
+      opacity: 0.72,
+      transmission: 0.03,
       thickness: 0.3,
       side: THREE.DoubleSide,
     });
@@ -267,12 +280,25 @@ export default function Globe() {
     const parts = new Map<string, PartHandle>();
 
     PART_DEFS.forEach((def, i) => {
-      const geo = new RoundedBoxGeometry(def.half.x * 2, def.half.y * 2, def.half.z * 2, 3, PANEL_RADIUS);
+      const geo =
+        def.shape === "box"
+          ? new RoundedBoxGeometry(def.half.x * 2, def.half.y * 2, def.half.z * 2, 3, PANEL_RADIUS)
+          : def.shape === "taper"
+            ? new THREE.CylinderGeometry(def.radiusTop, def.radiusBottom, def.height, 8, 1)
+            : new THREE.SphereGeometry(def.radius, 14, 10);
+
       const mesh = new THREE.Mesh(geo, armorMat);
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), edgeMat);
+      // Domed parts (helmet crown, pauldrons) are squashed spheres — the
+      // squash only applies to the visible shape, not the pivot group, so
+      // joints/eyes/reactor attached to the group below stay unsquashed.
+      const shapeGroup = new THREE.Group();
+      shapeGroup.add(mesh, edges);
+      if (def.shape === "dome") shapeGroup.scale.y = def.squash;
+
       const group = new THREE.Group();
       group.position.copy(def.center);
-      group.add(mesh, edges);
+      group.add(shapeGroup);
       root.add(group);
 
       const dir = def.center.clone().sub(CORE);
@@ -309,7 +335,7 @@ export default function Globe() {
 
     const chest = parts.get("chest");
     let reactorLight: THREE.PointLight | null = null;
-    if (chest) {
+    if (chest && chest.def.shape === "box") {
       const reactorLocal = new THREE.Vector3(0, 0, chest.def.half.z + 0.015);
       const reactorMat = new THREE.MeshBasicMaterial({ color: REACTOR_HEX });
       const core = new THREE.Mesh(new THREE.SphereGeometry(0.032, 12, 12), reactorMat);
