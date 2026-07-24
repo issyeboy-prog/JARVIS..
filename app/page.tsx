@@ -24,7 +24,7 @@ export default function Home() {
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
             Jarvis Online
           </span>
-          <span suppressHydrationWarning>
+          <span className="text-fuchsia-400/50" suppressHydrationWarning>
             {new Date().toLocaleDateString([], {
               month: "short",
               day: "numeric",

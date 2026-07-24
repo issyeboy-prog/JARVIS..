@@ -150,3 +150,43 @@ body {
     filter: brightness(0.85);
   }
 }
+
+/* Cyberpunk action accent — magenta instead of cyan, used for anything the
+   user actively triggers (add/edit/save, an active tab) so "you can act on
+   this" reads as a distinct color from the passive cyan info chrome. */
+.neon-action {
+  border-color: rgba(232, 42, 216, 0.45);
+  background: rgba(232, 42, 216, 0.1);
+  color: rgba(255, 200, 245, 0.95);
+}
+.neon-action:hover:not(:disabled) {
+  background: rgba(232, 42, 216, 0.2);
+}
+
+/* Big numeric/readout text (clock, temperature) — dual-color glow instead
+   of flat white, so the two accent colors show up somewhere besides thin
+   borders and headings. */
+.neon-value {
+  text-shadow:
+    0 0 8px rgba(56, 189, 248, 0.5),
+    0 0 18px rgba(232, 42, 216, 0.25);
+}
+
+@keyframes pulse-magenta {
+  0%,
+  100% {
+    text-shadow: 0 0 6px rgba(232, 42, 216, 0.6);
+    opacity: 1;
+  }
+  50% {
+    text-shadow: 0 0 16px rgba(232, 42, 216, 0.95);
+    opacity: 0.75;
+  }
+}
+
+/* Unmistakable "actually capturing your voice right now" pulse — distinct
+   from the steady cyan glow used everywhere else, which just means armed/
+   idle/passive. */
+.pulse-capturing {
+  animation: pulse-magenta 1.1s ease-in-out infinite;
+}

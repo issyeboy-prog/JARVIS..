@@ -94,23 +94,48 @@ function WaveformStrip({ level, color, label }: WaveformStripProps) {
   );
 }
 
+// The mic is physically "on" almost the entire time JARVIS is active — it
+// has to be, to catch the wake word — but that's ambient monitoring, not
+// JARVIS actually capturing what you say. Rendering that the same as a real
+// capture (same bright color, same prominence) is exactly what made it look
+// like "it's somehow always listening." Only the "listening" status is a
+// real capture; everything else is dimmed and explicitly labeled standby.
+const YOU_STATE: Record<string, { color: string; label: string; pulse: boolean }> = {
+  inactive: { color: "#2b3a4a", label: "Off", pulse: false },
+  idle: { color: "#2b7a8a", label: "Standby — wake word only", pulse: false },
+  listening: { color: "#e838ff", label: "Capturing your command", pulse: true },
+  thinking: { color: "#2b3a4a", label: "Off — processing", pulse: false },
+  speaking: { color: "#2b7a8a", label: "Standby — wake word only", pulse: false },
+};
+
+const JARVIS_STATE: Record<string, { color: string; label: string }> = {
+  inactive: { color: "#3a3a2b", label: "Off" },
+  idle: { color: "#3a3a2b", label: "Silent" },
+  listening: { color: "#3a3a2b", label: "Silent" },
+  thinking: { color: "#3a3a2b", label: "Silent" },
+  speaking: { color: "#22d3ee", label: "Talking" },
+};
+
 export default function WaveformPanel() {
   const { micLevel, ttsLevel, status } = useVoice();
-  // Wake word ("Jarvis") flips status out of idle immediately — green from
-  // that instant through listening/thinking/speaking, back to gold at rest.
-  const jarvisActive = status === "listening" || status === "thinking" || status === "speaking";
+  const you = YOU_STATE[status] ?? YOU_STATE.idle;
+  const jarvis = JARVIS_STATE[status] ?? JARVIS_STATE.idle;
 
   return (
     <div className="flex flex-col gap-3">
       <h2 className="text-xs uppercase tracking-[0.3em] text-cyan-400/70 holo-text">
         Voice Activity
       </h2>
-      <WaveformStrip level={micLevel} color="#22d3ee" label="You" />
-      <WaveformStrip
-        level={ttsLevel}
-        color={jarvisActive ? "#4ade80" : "#facc15"}
-        label="Jarvis"
-      />
+      <div className="flex flex-col gap-1">
+        <WaveformStrip level={micLevel} color={you.color} label="You" />
+        <p className={`pl-[4.25rem] text-[10px] ${you.pulse ? "pulse-capturing text-fuchsia-300" : "text-cyan-200/35"}`}>
+          {you.label}
+        </p>
+      </div>
+      <div className="flex flex-col gap-1">
+        <WaveformStrip level={ttsLevel} color={jarvis.color} label="Jarvis" />
+        <p className="pl-[4.25rem] text-[10px] text-cyan-200/35">{jarvis.label}</p>
+      </div>
     </div>
   );
 }

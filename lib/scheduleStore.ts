@@ -90,6 +90,10 @@ export function removeScheduleEventById(id: string) {
   writeSchedule(readSchedule().filter((e) => e.id !== id));
 }
 
+export function updateScheduleEvent(id: string, updates: Partial<Pick<ScheduleEvent, "time" | "title">>) {
+  writeSchedule(readSchedule().map((e) => (e.id === id ? { ...e, ...updates } : e)));
+}
+
 export function subscribeSchedule(callback: () => void): () => void {
   listeners.add(callback);
   return () => listeners.delete(callback);

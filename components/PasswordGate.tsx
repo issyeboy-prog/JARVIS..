@@ -85,7 +85,9 @@ export default function PasswordGate({ children }: { children: React.ReactNode }
             type="button"
             onClick={startListening}
             disabled={phase === "listening" || phase === "verifying"}
-            className="mb-4 w-full rounded-lg border border-cyan-400/40 bg-cyan-400/10 py-2.5 text-sm uppercase tracking-[0.15em] text-cyan-200 transition hover:bg-cyan-400/20 disabled:opacity-50"
+            className={`neon-action mb-4 w-full rounded-lg border py-2.5 text-sm uppercase tracking-[0.15em] transition disabled:opacity-50 ${
+              phase === "listening" ? "pulse-capturing" : ""
+            }`}
           >
             {phase === "listening" ? "Listening..." : "Speak Passphrase"}
           </button>
@@ -108,7 +110,7 @@ export default function PasswordGate({ children }: { children: React.ReactNode }
           <button
             type="submit"
             disabled={phase === "verifying" || !typedPhrase.trim()}
-            className="rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-4 text-sm uppercase tracking-[0.15em] text-cyan-200 transition hover:bg-cyan-400/20 disabled:opacity-50"
+            className="neon-action rounded-lg border px-4 text-sm uppercase tracking-[0.15em] transition disabled:opacity-50"
           >
             Go
           </button>

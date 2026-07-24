@@ -28,7 +28,7 @@ export default function Clock() {
         {greeting(now.getHours())}
       </span>
       <span
-        className="font-mono text-4xl font-light tabular-nums text-cyan-50 sm:text-5xl"
+        className="neon-value font-mono text-4xl font-light tabular-nums text-cyan-50 sm:text-5xl"
         suppressHydrationWarning
       >
         {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}

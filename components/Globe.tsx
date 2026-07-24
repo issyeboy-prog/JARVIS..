@@ -569,7 +569,11 @@ export default function Globe() {
         playsInline
         style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
       />
-      <div className="absolute top-[30%] left-1/2 -translate-x-1/2 text-[11px] uppercase tracking-[0.3em] text-cyan-300/70 holo-text">
+      <div
+        className={`absolute top-[30%] left-1/2 -translate-x-1/2 text-[11px] uppercase tracking-[0.3em] holo-text ${
+          status === "listening" ? "pulse-capturing text-fuchsia-300" : "text-cyan-300/70"
+        }`}
+      >
         {STATUS_LABEL[status]}
       </div>
       {subtitle && (

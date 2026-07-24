@@ -46,7 +46,7 @@ export default function NewsPanel() {
               onClick={() => setActive(c.key)}
               className={`rounded-full border px-2.5 py-1 text-xs transition ${
                 active === c.key
-                  ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-100"
+                  ? "neon-action border"
                   : "border-cyan-500/10 text-cyan-200/50 hover:bg-cyan-500/5"
               }`}
             >

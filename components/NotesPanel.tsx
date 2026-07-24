@@ -85,12 +85,9 @@ export default function NotesPanel() {
         <input
           name="note"
           placeholder="Jot something down…"
-          className="min-w-0 flex-1 rounded-lg border border-cyan-500/15 bg-black/20 px-3 py-1.5 text-sm text-cyan-50 placeholder:text-cyan-200/30 focus:border-cyan-400/40 focus:outline-none"
+          className="min-w-0 flex-1 rounded-lg border border-cyan-500/15 bg-black/20 px-3 py-1.5 text-sm text-cyan-50 placeholder:text-cyan-200/30 focus:border-fuchsia-400/50 focus:outline-none"
         />
-        <button
-          type="submit"
-          className="rounded-lg border border-cyan-400/30 px-3 text-sm text-cyan-200/80 transition hover:bg-cyan-500/10"
-        >
+        <button type="submit" className="neon-action rounded-lg border px-3 text-sm transition">
           Add
         </button>
       </form>

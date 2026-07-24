@@ -70,7 +70,7 @@ export default function WeatherPanel() {
       )}
       {weather && (
         <div className="flex items-baseline gap-2">
-          <span className="font-mono text-3xl text-cyan-50">
+          <span className="neon-value font-mono text-3xl text-cyan-50">
             {weather.temperature}°C
           </span>
           <span className="text-sm text-cyan-200/70">

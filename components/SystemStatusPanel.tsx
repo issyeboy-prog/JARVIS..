@@ -5,9 +5,20 @@ import { useVoice } from "@/contexts/VoiceContext";
 const DOT_COLOR: Record<string, string> = {
   inactive: "bg-slate-500",
   idle: "bg-cyan-400",
-  listening: "bg-teal-400",
+  listening: "bg-fuchsia-400",
   thinking: "bg-violet-400",
   speaking: "bg-cyan-300",
+};
+
+// Mirrors the mic actually being armed (idle/speaking, monitoring for the
+// wake word only) vs genuinely capturing a command (listening) vs fully off
+// (thinking) — see WaveformPanel for the same distinction on the meters.
+const MIC_LABEL: Record<string, string> = {
+  inactive: "Standby",
+  idle: "Armed (wake word)",
+  listening: "Capturing…",
+  thinking: "Off",
+  speaking: "Armed (wake word)",
 };
 
 export default function SystemStatusPanel() {
@@ -16,7 +27,7 @@ export default function SystemStatusPanel() {
   const rows = [
     { label: "Voice engine", value: supported ? "Online" : "Unsupported" },
     { label: "Status", value: status },
-    { label: "Mic", value: status === "inactive" ? "Standby" : "Armed" },
+    { label: "Mic", value: MIC_LABEL[status] ?? "Armed" },
   ];
 
   return (
