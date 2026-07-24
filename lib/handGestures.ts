@@ -37,9 +37,8 @@ export interface HandGestureCallbacks {
   // of MediaPipe's built-in gesture categories, so this is detected from
   // raw landmark geometry instead (see isCoyoteShape below).
   onCoyoteSign?: () => void;
-  // Index + middle fingers extended together (not splayed like a peace
-  // sign), ring/pinky curled, swept sideways. Fires once per completed
-  // swipe while the shape is held.
+  // Ring + pinky fingers extended together, index/middle curled, swept
+  // sideways. Fires once per completed swipe while the shape is held.
   onSwipe?: (direction: "left" | "right") => void;
 }
 
@@ -100,19 +99,20 @@ function isCoyoteShape(lm: Landmark3[]): boolean {
   return pinchMiddle && pinchRing && indexExtended && pinkyExtended;
 }
 
-// Index + middle extended and held close together (not splayed into a V
-// like a peace sign), ring/pinky curled in, thumb doesn't matter. The
-// "together" check is what keeps this from double-firing alongside a
-// peace sign, which is index+middle extended but spread apart.
-function isTwoFingerPoint(lm: Landmark3[]): boolean {
+// Ring + pinky extended and held close together, index/middle curled in,
+// thumb doesn't matter. Deliberately the mirror-image finger pairing of
+// MediaPipe's built-in Victory (index+middle) gesture, so this shape can
+// never be misclassified as a peace sign — no exclusion check needed like
+// the earlier index+middle version required.
+function isSwipeShape(lm: Landmark3[]): boolean {
   if (lm.length < 21) return false;
   const scale = dist3(lm[0], lm[9]) || 1;
-  const indexExtended = dist3(lm[0], lm[8]) > dist3(lm[0], lm[6]) * 1.15;
-  const middleExtended = dist3(lm[0], lm[12]) > dist3(lm[0], lm[10]) * 1.15;
-  const ringCurled = dist3(lm[0], lm[16]) < dist3(lm[0], lm[14]) * 1.05;
-  const pinkyCurled = dist3(lm[0], lm[20]) < dist3(lm[0], lm[18]) * 1.05;
-  const fingersTogether = dist3(lm[8], lm[12]) / scale < 0.3;
-  return indexExtended && middleExtended && ringCurled && pinkyCurled && fingersTogether;
+  const ringExtended = dist3(lm[0], lm[16]) > dist3(lm[0], lm[14]) * 1.15;
+  const pinkyExtended = dist3(lm[0], lm[20]) > dist3(lm[0], lm[18]) * 1.15;
+  const indexCurled = dist3(lm[0], lm[8]) < dist3(lm[0], lm[6]) * 1.05;
+  const middleCurled = dist3(lm[0], lm[12]) < dist3(lm[0], lm[10]) * 1.05;
+  const fingersTogether = dist3(lm[16], lm[20]) / scale < 0.3;
+  return ringExtended && pinkyExtended && indexCurled && middleCurled && fingersTogether;
 }
 
 // A swipe must cover this much of the frame width, within this long a
@@ -173,16 +173,8 @@ export async function startHandGestures(
       if (isFist && !wasFist) onFist();
       wasFist = isFist;
 
-      // Excludes hands that also match the two-finger-point shape: that
-      // gesture is deliberately "a peace sign with the fingers held
-      // together," and MediaPipe's Victory classifier doesn't key off
-      // finger spread, so without this a swipe attempt could also fire the
-      // peace-sign explode/collapse toggle.
       const isPeaceSign = result.gestures.some(
-        (g, i) =>
-          g[0]?.categoryName === "Victory" &&
-          g[0].score > 0.6 &&
-          !isTwoFingerPoint(result.landmarks[i])
+        (g) => g[0]?.categoryName === "Victory" && g[0].score > 0.6
       );
       if (isPeaceSign && !wasPeaceSign) onPeaceSign?.();
       wasPeaceSign = isPeaceSign;
@@ -191,9 +183,11 @@ export async function startHandGestures(
       if (isCoyoteSign && !wasCoyoteSign) onCoyoteSign?.();
       wasCoyoteSign = isCoyoteSign;
 
-      const pointingLm = result.landmarks.find((lm) => isTwoFingerPoint(lm));
-      if (pointingLm) {
-        const x = 1 - pointingLm[8].x; // mirrored, same convention as onHands
+      const swipeLm = result.landmarks.find((lm) => isSwipeShape(lm));
+      if (swipeLm) {
+        // Ring tip (16), mirrored — same convention as onHands. Index tip
+        // isn't usable here since it's curled in this shape.
+        const x = 1 - swipeLm[16].x;
         const now = performance.now();
         if (swipeAnchorX === null) {
           swipeAnchorX = x;
