@@ -35,14 +35,24 @@ body {
 
 .glass-panel {
   border-radius: 1rem;
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  background: rgba(10, 10, 26, 0.32);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  /* A subtle top-left-to-bottom-right gradient instead of a flat fill —
+     reads as a beveled sheet of glass with real thickness rather than a
+     flat rectangle painted onto the screen. */
+  background: linear-gradient(
+    145deg,
+    rgba(18, 22, 40, 0.4),
+    rgba(8, 8, 20, 0.28) 55%,
+    rgba(20, 8, 28, 0.32)
+  );
   backdrop-filter: blur(8px);
   padding: 1.25rem;
   box-shadow:
-    0 0 24px rgba(56, 189, 248, 0.06) inset,
-    0 0 1px rgba(56, 189, 248, 0.45),
-    0 0 18px rgba(217, 22, 197, 0.12);
+    0 0 24px rgba(56, 189, 248, 0.07) inset,
+    0 1px 0 rgba(160, 220, 255, 0.12) inset,
+    0 0 1px rgba(56, 189, 248, 0.5),
+    0 0 22px rgba(217, 22, 197, 0.16),
+    0 10px 30px rgba(0, 0, 0, 0.35);
   /* The grid wrapper around panels is pointer-events:none so clicks in the
      empty space reach the full-screen globe underneath — panels opt back
      in here so their own buttons/inputs/links still work. */
@@ -87,9 +97,9 @@ body {
 
 .holo-text {
   text-shadow:
-    0.6px 0 rgba(232, 42, 216, 0.5),
-    -0.6px 0 rgba(56, 189, 248, 0.6),
-    0 0 10px rgba(56, 189, 248, 0.25);
+    0.6px 0 rgba(232, 42, 216, 0.6),
+    -0.6px 0 rgba(56, 189, 248, 0.7),
+    0 0 12px rgba(56, 189, 248, 0.35);
 }
 
 .holo-scanlines {
@@ -168,8 +178,8 @@ body {
    borders and headings. */
 .neon-value {
   text-shadow:
-    0 0 8px rgba(56, 189, 248, 0.5),
-    0 0 18px rgba(232, 42, 216, 0.25);
+    0 0 10px rgba(56, 189, 248, 0.6),
+    0 0 22px rgba(232, 42, 216, 0.35);
 }
 
 @keyframes pulse-magenta {

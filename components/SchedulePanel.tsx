@@ -82,21 +82,24 @@ export default function SchedulePanel() {
           ) : (
             <li
               key={e.id}
-              className="group flex items-center gap-3 rounded-lg border border-cyan-500/10 bg-cyan-500/5 px-3 py-2"
+              className="flex items-center gap-2 rounded-lg border border-cyan-500/10 bg-cyan-500/5 px-3 py-2"
             >
               <span className="font-mono text-sm text-cyan-300">{e.time}</span>
               <span className="flex-1 text-sm text-cyan-50/90">{e.title}</span>
+              {/* Always visible (not hover-only) — hover doesn't exist on
+                  touch, so a tap-only reveal would make these unreachable
+                  on phones/tablets. */}
               <button
                 onClick={() => setEditingId(e.id)}
                 aria-label="Edit"
-                className="shrink-0 text-xs text-cyan-200/30 opacity-0 transition hover:text-fuchsia-300 group-hover:opacity-100"
+                className="shrink-0 rounded-md p-1.5 text-sm text-cyan-200/50 transition hover:bg-fuchsia-500/10 hover:text-fuchsia-300 active:bg-fuchsia-500/20"
               >
                 ✎
               </button>
               <button
                 onClick={() => removeScheduleEventById(e.id)}
                 aria-label="Remove event"
-                className="shrink-0 text-cyan-200/30 opacity-0 transition hover:text-fuchsia-300 group-hover:opacity-100"
+                className="shrink-0 rounded-md p-1.5 text-base leading-none text-cyan-200/50 transition hover:bg-fuchsia-500/10 hover:text-fuchsia-300 active:bg-fuchsia-500/20"
               >
                 ×
               </button>

@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { useVoice, type VoiceStatus } from "@/contexts/VoiceContext";
 import {
   startHandGestures,
@@ -66,13 +67,15 @@ const AUSTRALIA = [
   [126, -32], [115, -34],
 ];
 
-const CONTINENTS: { id: string; name: string; points: number[][] }[] = [
-  { id: "north_america", name: "North America", points: NORTH_AMERICA },
-  { id: "south_america", name: "South America", points: SOUTH_AMERICA },
-  { id: "africa", name: "Africa", points: AFRICA },
-  { id: "europe", name: "Europe", points: EUROPE },
-  { id: "asia", name: "Asia", points: ASIA },
-  { id: "australia", name: "Australia", points: AUSTRALIA },
+// Each continent gets its own vivid neon hue rather than one flat land
+// color — a "poppy" varied palette instead of a monochrome landmass.
+const CONTINENTS: { id: string; name: string; color: number; points: number[][] }[] = [
+  { id: "north_america", name: "North America", color: 0x39ff6a, points: NORTH_AMERICA },
+  { id: "south_america", name: "South America", color: 0xffe93e, points: SOUTH_AMERICA },
+  { id: "africa", name: "Africa", color: 0xff8a2e, points: AFRICA },
+  { id: "europe", name: "Europe", color: 0x2effc7, points: EUROPE },
+  { id: "asia", name: "Asia", color: 0x8a6aff, points: ASIA },
+  { id: "australia", name: "Australia", color: 0xff5e5e, points: AUSTRALIA },
 ];
 
 // Ear-clipping a concave coastline (every real one) sometimes needs a
@@ -136,17 +139,29 @@ function buildContinentGeometry(points: number[][], radius: number) {
   const restPosition = centroid.clone().multiplyScalar(radius);
 
   // Vertices come out as (lon, lat, 0) — reproject each onto the sphere,
+  // nudge slightly along the true radial direction for rugged terrain
+  // relief (a real geometric bump, not a texture trick — genuine "3D
+  // texture" that actually catches light differently across the surface),
   // then re-center on the continent's own rest position so the geometry
   // (like the old armor panels) lives in local, origin-relative space and
   // the group's own transform drives the explode offset.
   const pos = geo.attributes.position;
   const v = new THREE.Vector3();
+  const n = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
-    latLonToVector3(pos.getY(i), pos.getX(i), radius, v).sub(restPosition);
+    latLonToVector3(pos.getY(i), pos.getX(i), radius, v);
+    n.copy(v).normalize();
+    v.addScaledVector(n, terrainBump(v) * 0.014);
+    v.sub(restPosition);
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   pos.needsUpdate = true;
-  geo.computeVertexNormals();
+  // The subdivided fill is non-indexed (each triangle owns unique verts),
+  // so computeVertexNormals alone gives flat per-triangle normals. Welding
+  // coincident vertices first lets normals average across neighboring
+  // triangles for smooth shading instead of a faceted look.
+  const welded = mergeVertices(geo, 1e-5);
+  welded.computeVertexNormals();
 
   // The coastline outline is built from the original boundary points, not
   // the subdivided fill — an EdgesGeometry on the fill would trace every
@@ -168,7 +183,7 @@ function buildContinentGeometry(points: number[][], radius: number) {
   const edgeGeo = new THREE.BufferGeometry();
   edgeGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(outlineVerts), 3));
 
-  return { geo, edgeGeo, restPosition, explodeDir: centroid.clone() };
+  return { geo: welded, edgeGeo, restPosition, explodeDir: centroid.clone() };
 }
 
 function hash(i: number): number {
@@ -176,14 +191,43 @@ function hash(i: number): number {
   return x - Math.floor(x);
 }
 
+// A handful of overlapping low-frequency sine waves rather than per-vertex
+// random noise — continuous and smooth by construction, so nearby vertices
+// displace by nearly the same amount. Real terrain reads as rolling relief
+// because it's spatially correlated; independent per-vertex randomness at
+// this mesh density just reads as static/pockmarking, not hills.
+function terrainBump(p: THREE.Vector3): number {
+  return (
+    (Math.sin(p.x * 3.1 + p.y * 1.7 + 4.2) +
+      Math.cos(p.y * 2.3 - p.z * 2.9 + 1.1) +
+      Math.sin(p.z * 4.1 + p.x * 1.3 + 2.6)) /
+    3
+  );
+}
+
+// Gentle radial swell over a sphere centered at the origin — genuine
+// geometric relief on the ocean shell rather than a perfectly round one.
+function addSurfaceBump(geo: THREE.BufferGeometry, amplitude: number) {
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    n.copy(v).normalize();
+    v.addScaledVector(n, terrainBump(v) * amplitude);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+}
+
 const EARTH_RADIUS = 1.0;
 const EXPLODE_DIST = 0.8;
-// Realistic-Earth palette (blue ocean, green land, white cloud/light) rather
-// than the app's usual cyan/magenta duotone — the ring and rim glow below
-// keep a magenta HUD accent, but the planet itself should read as a planet.
+// Realistic-Earth base palette (blue ocean, white cloud/light) — each
+// continent gets its own poppy neon hue (see CONTINENTS below) rather than
+// one flat land color, and the ring keeps a magenta HUD accent.
 const OCEAN_HEX = 0x1c7dff;
-const LAND_HEX = 0x39ff6a;
-const LAND_EDGE_HEX = 0xb6ffce;
+const LAND_EDGE_HEX = 0xb6ffce; // tether/callout line color only now
 const ATMO_HEX = 0x4fb2ff;
 const RING_HEX = 0xff2bd6;
 
@@ -221,6 +265,12 @@ export default function Globe() {
   // 0 = assembled globe, 1 = continents fully lifted off the surface.
   const explodeTargetRef = useRef(0);
   const explodeRef = useRef(0);
+  // Toggled by the "coyote" hand sign — freezes rotation entirely (both the
+  // idle auto-drift and hand-drag input) so labels/news hold still to read,
+  // in either the assembled or exploded state. Mirrored into state only for
+  // the on-screen "locked" indicator; the draw loop reads the ref.
+  const rotationLockedRef = useRef(false);
+  const [rotationLocked, setRotationLocked] = useState(false);
 
   useEffect(() => {
     levelRef.current = Math.max(micLevel, ttsLevel);
@@ -272,7 +322,7 @@ export default function Globe() {
           }
 
           const last = lastHandPosRef.current;
-          if (last) {
+          if (last && !rotationLockedRef.current) {
             const dx = drive.x - last.x;
             const dy = drive.y - last.y;
             const DRAG_SENSITIVITY = 22;
@@ -289,6 +339,12 @@ export default function Globe() {
         // Closed fist: settle every continent back onto the globe.
         onFist: () => {
           explodeTargetRef.current = 0;
+        },
+        // Coyote sign: freeze rotation in place (assembled or exploded) so
+        // the continent names/news are readable, toggled off the same way.
+        onCoyoteSign: () => {
+          rotationLockedRef.current = !rotationLockedRef.current;
+          setRotationLocked(rotationLockedRef.current);
         },
       });
       setHandStatus("active");
@@ -341,7 +397,9 @@ export default function Globe() {
       clearcoat: 0.3,
       side: THREE.DoubleSide,
     });
-    const ocean = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 48, 32), oceanMat);
+    const oceanGeo = new THREE.SphereGeometry(EARTH_RADIUS, 96, 64);
+    addSurfaceBump(oceanGeo, 0.018);
+    const ocean = new THREE.Mesh(oceanGeo, oceanMat);
     root.add(ocean);
 
     // A low-poly sphere's EdgesGeometry naturally reads as a lat/lon grid.
@@ -365,13 +423,17 @@ export default function Globe() {
         seed = (seed * 16807) % 2147483647;
         return seed / 2147483647;
       };
-      for (let i = 0; i < 70; i++) {
+      // Faint neon tints instead of flat white — an iridescent, "poppy"
+      // cloud deck rather than a plain overcast one.
+      const CLOUD_TINTS = ["210,240,255", "255,255,255", "225,215,255", "205,255,240"];
+      for (let i = 0; i < 55; i++) {
         const x = rand() * cloudCanvas.width;
         const y = rand() * cloudCanvas.height;
         const r = 8 + rand() * 22;
+        const tint = CLOUD_TINTS[Math.floor(rand() * CLOUD_TINTS.length)];
         const g = cloudCtx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, "rgba(255,255,255,0.55)");
-        g.addColorStop(1, "rgba(255,255,255,0)");
+        g.addColorStop(0, `rgba(${tint},0.42)`);
+        g.addColorStop(1, `rgba(${tint},0)`);
         cloudCtx.fillStyle = g;
         cloudCtx.beginPath();
         cloudCtx.ellipse(x, y, r, r * 0.6, 0, 0, Math.PI * 2);
@@ -389,22 +451,6 @@ export default function Globe() {
     const cloud = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 32, 24), cloudMat);
     root.add(cloud);
 
-    const landMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0a3d1a,
-      emissive: LAND_HEX,
-      emissiveIntensity: 0.55,
-      metalness: 0.1,
-      roughness: 0.4,
-      transparent: true,
-      opacity: 0.88,
-      side: THREE.DoubleSide,
-    });
-    const landEdgeMat = new THREE.LineBasicMaterial({
-      color: LAND_EDGE_HEX,
-      transparent: true,
-      opacity: 0.9,
-    });
-
     interface ContinentHandle {
       id: string;
       group: THREE.Group;
@@ -413,6 +459,8 @@ export default function Globe() {
       explodeScale: number;
     }
     const continents: ContinentHandle[] = [];
+    const landMats: THREE.MeshPhysicalMaterial[] = [];
+    const landEdgeMats: THREE.LineBasicMaterial[] = [];
 
     // Name + news-blurb labels are plain DOM, not WebGL — projected onto
     // screen space every frame from each continent's current (possibly
@@ -427,6 +475,26 @@ export default function Globe() {
 
     CONTINENTS.forEach((c, i) => {
       const { geo, edgeGeo, restPosition, explodeDir } = buildContinentGeometry(c.points, EARTH_RADIUS * 1.006);
+
+      const baseColor = new THREE.Color(c.color);
+      const landMat = new THREE.MeshPhysicalMaterial({
+        color: baseColor.clone().multiplyScalar(0.22),
+        emissive: baseColor,
+        emissiveIntensity: 0.55,
+        metalness: 0.1,
+        roughness: 0.4,
+        transparent: true,
+        opacity: 0.88,
+        side: THREE.DoubleSide,
+      });
+      const landEdgeMat = new THREE.LineBasicMaterial({
+        color: baseColor.clone().lerp(new THREE.Color(0xffffff), 0.55),
+        transparent: true,
+        opacity: 0.9,
+      });
+      landMats.push(landMat);
+      landEdgeMats.push(landEdgeMat);
+
       const mesh = new THREE.Mesh(geo, landMat);
       const edges = new THREE.LineLoop(edgeGeo, landEdgeMat);
       const group = new THREE.Group();
@@ -576,8 +644,10 @@ export default function Globe() {
       const lvl = levelRef.current;
 
       // Slow constant drift so it's never fully static, plus whatever the
-      // hand is driving.
-      targetRotRef.current.y += 0.0012;
+      // hand is driving — unless the coyote sign has frozen rotation.
+      if (!rotationLockedRef.current) {
+        targetRotRef.current.y += 0.0012;
+      }
 
       // Viscous spring: rendered rotation chases the target with heavy
       // damping and a little overshoot — loose and gooey, not precise.
@@ -641,7 +711,7 @@ export default function Globe() {
       tetherMat.opacity = 0.2 * Math.min(1, explode * 3);
 
       oceanMat.emissiveIntensity = 0.2 + lvl * 0.3;
-      landMat.emissiveIntensity = 0.5 + lvl * 0.35;
+      landMats.forEach((m) => (m.emissiveIntensity = 0.5 + lvl * 0.35));
       coreLight.intensity = (0.5 + lvl * 1.1) * (1 - explode * 0.3);
       bloom.strength = 0.4 + lvl * 0.35;
       ring.rotation.z += 0.0025;
@@ -668,8 +738,8 @@ export default function Globe() {
       gridMat.dispose();
       cloudTex.dispose();
       cloudMat.dispose();
-      landMat.dispose();
-      landEdgeMat.dispose();
+      landMats.forEach((m) => m.dispose());
+      landEdgeMats.forEach((m) => m.dispose());
       atmoMat.dispose();
       ringMat.dispose();
       tetherMat.dispose();
@@ -711,6 +781,11 @@ export default function Globe() {
       >
         {STATUS_LABEL[status]}
       </div>
+      {rotationLocked && (
+        <div className="pointer-events-none absolute top-[35%] left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-[0.25em] text-fuchsia-300 pulse-capturing">
+          🔒 Rotation Locked
+        </div>
+      )}
       {subtitle && (
         <div className="pointer-events-none absolute top-[68%] left-1/2 w-[85%] max-w-md -translate-x-1/2 text-center">
           <p

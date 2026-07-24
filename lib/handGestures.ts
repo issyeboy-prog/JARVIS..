@@ -32,6 +32,11 @@ export interface HandGestureCallbacks {
   // detection, either hand. "Victory" is MediaPipe's built-in category
   // name for this gesture — no custom landmark geometry needed.
   onPeaceSign?: () => void;
+  // "Coyote" hand shadow-puppet shape: thumb pinched to both the middle and
+  // ring fingertips, index and pinky left extended as the "ears." Not one
+  // of MediaPipe's built-in gesture categories, so this is detected from
+  // raw landmark geometry instead (see isCoyoteShape below).
+  onCoyoteSign?: () => void;
 }
 
 const WASM_URL =
@@ -65,9 +70,35 @@ function smooth(prev: HandPoint | null, next: HandPoint): HandPoint {
   };
 }
 
+interface Landmark3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+function dist3(a: Landmark3, b: Landmark3): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+// MediaPipe's 21-point hand landmark indices used here: 0 wrist, 4 thumb
+// tip, 6 index PIP, 8 index tip, 9 middle MCP, 12 middle tip, 16 ring tip,
+// 18 pinky PIP, 20 pinky tip. Pinch distances and "extended" comparisons
+// are both normalized against palm size (wrist-to-middle-MCP), so the
+// gesture triggers the same whether the hand is close to or far from the
+// camera.
+function isCoyoteShape(lm: Landmark3[]): boolean {
+  if (lm.length < 21) return false;
+  const scale = dist3(lm[0], lm[9]) || 1;
+  const pinchMiddle = dist3(lm[4], lm[12]) / scale < 0.55;
+  const pinchRing = dist3(lm[4], lm[16]) / scale < 0.55;
+  const indexExtended = dist3(lm[0], lm[8]) > dist3(lm[0], lm[6]) * 1.15;
+  const pinkyExtended = dist3(lm[0], lm[20]) > dist3(lm[0], lm[18]) * 1.15;
+  return pinchMiddle && pinchRing && indexExtended && pinkyExtended;
+}
+
 export async function startHandGestures(
   videoEl: HTMLVideoElement,
-  { onHands, onFist, onPeaceSign }: HandGestureCallbacks
+  { onHands, onFist, onPeaceSign, onCoyoteSign }: HandGestureCallbacks
 ): Promise<HandGestureHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
@@ -80,6 +111,7 @@ export async function startHandGestures(
   let raf = 0;
   let wasFist = false;
   let wasPeaceSign = false;
+  let wasCoyoteSign = false;
   let smoothedLeft: HandPoint | null = null;
   let smoothedRight: HandPoint | null = null;
 
@@ -114,6 +146,10 @@ export async function startHandGestures(
       );
       if (isPeaceSign && !wasPeaceSign) onPeaceSign?.();
       wasPeaceSign = isPeaceSign;
+
+      const isCoyoteSign = result.landmarks.some((lm) => isCoyoteShape(lm));
+      if (isCoyoteSign && !wasCoyoteSign) onCoyoteSign?.();
+      wasCoyoteSign = isCoyoteSign;
     }
     raf = requestAnimationFrame(tick);
   };
