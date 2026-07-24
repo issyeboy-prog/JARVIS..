@@ -345,74 +345,83 @@ function buildEarthTexture(): HTMLCanvasElement {
     ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
 
     // Base mottling — the terrain color patches themselves.
-    for (let i = 0; i < 140; i++) {
+    for (let i = 0; i < 180; i++) {
       const x = minX + rand() * (maxX - minX);
       const y = minY + rand() * (maxY - minY);
-      const r = 5 + rand() * 20;
+      const r = 5 + rand() * 24;
       const tone = EARTH_TONES[Math.floor(rand() * EARTH_TONES.length)];
       const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, `${tone}cc`);
+      g.addColorStop(0, `${tone}ff`);
       g.addColorStop(1, `${tone}00`);
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.ellipse(x, y, r, r * 0.7, rand() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
     }
-    // Darker shadow blotches and lighter highlight blotches — raises the
-    // contrast range so the mottling actually reads at a glance instead of
-    // sitting in one narrow mid-tone band.
-    for (let i = 0; i < 55; i++) {
+    // Darker shadow blotches and lighter highlight blotches — a much wider
+    // contrast range than the base mottling alone, so the terrain reads as
+    // dramatic relief at a glance instead of one narrow mid-tone band.
+    for (let i = 0; i < 70; i++) {
       const x = minX + rand() * (maxX - minX);
       const y = minY + rand() * (maxY - minY);
-      const r = 10 + rand() * 30;
+      const r = 10 + rand() * 34;
       const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, "rgba(10,20,10,0.22)");
-      g.addColorStop(1, "rgba(10,20,10,0)");
+      g.addColorStop(0, "rgba(6,14,6,0.4)");
+      g.addColorStop(1, "rgba(6,14,6,0)");
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.ellipse(x, y, r, r * 0.6, rand() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
     }
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < 45; i++) {
       const x = minX + rand() * (maxX - minX);
       const y = minY + rand() * (maxY - minY);
-      const r = 6 + rand() * 16;
+      const r = 6 + rand() * 18;
       const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, "rgba(220,215,170,0.28)");
-      g.addColorStop(1, "rgba(220,215,170,0)");
+      g.addColorStop(0, "rgba(235,232,190,0.5)");
+      g.addColorStop(1, "rgba(235,232,190,0)");
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.ellipse(x, y, r, r * 0.6, rand() * Math.PI, 0, Math.PI * 2);
       ctx.fill();
     }
-    // Thin mountain-ridge-like squiggles for fine detail at close range.
-    ctx.strokeStyle = "rgba(40,35,25,0.35)";
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 10; i++) {
+    // Mountain-ridge-like squiggles, thicker and darker for visibility.
+    ctx.strokeStyle = "rgba(30,25,18,0.55)";
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 16; i++) {
       let x = minX + rand() * (maxX - minX);
       let y = minY + rand() * (maxY - minY);
       ctx.beginPath();
       ctx.moveTo(x, y);
-      const segs = 4 + Math.floor(rand() * 4);
+      const segs = 4 + Math.floor(rand() * 5);
       for (let s = 0; s < segs; s++) {
-        x += (rand() - 0.5) * 40;
-        y += (rand() - 0.5) * 40;
+        x += (rand() - 0.5) * 45;
+        y += (rand() - 0.5) * 45;
         ctx.lineTo(x, y);
       }
       ctx.stroke();
     }
-    // Sparse warm city-light dots — a handful of small clustered clusters
-    // rather than a uniform scatter, reading as settlements not static.
-    for (let cluster = 0; cluster < 5; cluster++) {
+    // Warm glowing city-light clusters — bigger and brighter than a flat
+    // dot so they actually read at normal viewing scale, not just on a
+    // pixel-peep zoom.
+    for (let cluster = 0; cluster < 9; cluster++) {
       const cx = minX + rand() * (maxX - minX);
       const cy = minY + rand() * (maxY - minY);
-      const count = 4 + Math.floor(rand() * 8);
+      const count = 5 + Math.floor(rand() * 10);
       for (let i = 0; i < count; i++) {
-        const x = cx + (rand() - 0.5) * 18;
-        const y = cy + (rand() - 0.5) * 18;
-        ctx.fillStyle = "rgba(255,232,170,0.9)";
+        const x = cx + (rand() - 0.5) * 22;
+        const y = cy + (rand() - 0.5) * 22;
+        const glow = ctx.createRadialGradient(x, y, 0, x, y, 3.2);
+        glow.addColorStop(0, "rgba(255,238,190,1)");
+        glow.addColorStop(0.5, "rgba(255,220,150,0.6)");
+        glow.addColorStop(1, "rgba(255,220,150,0)");
+        ctx.fillStyle = glow;
         ctx.beginPath();
-        ctx.arc(x, y, 0.8, 0, Math.PI * 2);
+        ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,250,225,1)";
+        ctx.beginPath();
+        ctx.arc(x, y, 0.9, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -587,7 +596,7 @@ export default function Globe() {
     // behind the globe, with a very slow independent drift for a subtle
     // sense of depth. Otherwise the space around the globe is just flat
     // black, which is a big part of why the scene reads as bland.
-    const STAR_COUNT = 700;
+    const STAR_COUNT = 1400;
     const starPositions = new Float32Array(STAR_COUNT * 3);
     const starColors = new Float32Array(STAR_COUNT * 3);
     const starTmp = new THREE.Vector3();
@@ -600,7 +609,7 @@ export default function Globe() {
       starTmp
         .set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1)
         .normalize()
-        .multiplyScalar(16 + Math.random() * 10);
+        .multiplyScalar(12 + Math.random() * 12);
       starPositions[i * 3] = starTmp.x;
       starPositions[i * 3 + 1] = starTmp.y;
       starPositions[i * 3 + 2] = starTmp.z;
@@ -613,15 +622,42 @@ export default function Globe() {
     starGeo.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
     starGeo.setAttribute("color", new THREE.BufferAttribute(starColors, 3));
     const starMat = new THREE.PointsMaterial({
-      size: 0.05,
+      size: 0.1,
       vertexColors: true,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.95,
       sizeAttenuation: true,
       depthWrite: false,
     });
     const stars = new THREE.Points(starGeo, starMat);
     scene.add(stars);
+
+    // A second, sparser layer of larger "bright" stars with their own
+    // twinkle (opacity pulse) for a bit of visible sparkle motion, not
+    // just a static dot field.
+    const BRIGHT_STAR_COUNT = 40;
+    const brightStarPositions = new Float32Array(BRIGHT_STAR_COUNT * 3);
+    for (let i = 0; i < BRIGHT_STAR_COUNT; i++) {
+      starTmp
+        .set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1)
+        .normalize()
+        .multiplyScalar(13 + Math.random() * 10);
+      brightStarPositions[i * 3] = starTmp.x;
+      brightStarPositions[i * 3 + 1] = starTmp.y;
+      brightStarPositions[i * 3 + 2] = starTmp.z;
+    }
+    const brightStarGeo = new THREE.BufferGeometry();
+    brightStarGeo.setAttribute("position", new THREE.BufferAttribute(brightStarPositions, 3));
+    const brightStarMat = new THREE.PointsMaterial({
+      size: 0.22,
+      color: 0xeaf6ff,
+      transparent: true,
+      opacity: 0.9,
+      sizeAttenuation: true,
+      depthWrite: false,
+    });
+    const brightStars = new THREE.Points(brightStarGeo, brightStarMat);
+    scene.add(brightStars);
 
     // Warm near-white "sunlight" key + a deep-blue fill on the far side —
     // reads as an actual lit planet instead of flat cyberpunk two-tone.
@@ -836,6 +872,57 @@ export default function Globe() {
     ring.rotation.x = Math.PI / 2 + 0.2;
     scene.add(ring);
 
+    // Orbiting satellite markers, each on its own faint orbit-ring trail at
+    // a different radius/inclination/speed — the classic "tracking
+    // stations around the globe" sci-fi HUD touch.
+    interface SatelliteHandle {
+      spin: THREE.Group; // rotated each frame — carries only the satellite
+      speed: number;
+    }
+    const SATELLITES: { radius: number; incline: number; speed: number; color: number }[] = [
+      { radius: 1.55, incline: 0.5, speed: 0.006, color: 0xff2bd6 },
+      { radius: 1.72, incline: -0.35, speed: -0.0045, color: 0x4fe0ff },
+      { radius: 1.42, incline: 1.1, speed: 0.008, color: 0xfff2d0 },
+    ];
+    const satelliteMats: THREE.MeshBasicMaterial[] = [];
+    const satelliteRingMats: THREE.MeshBasicMaterial[] = [];
+    const satellites: SatelliteHandle[] = SATELLITES.map((s) => {
+      // pivot only sets the orbit plane's incline, staying fixed — the
+      // orbit-ring trail lives here so it doesn't spin with the satellite.
+      const pivot = new THREE.Group();
+      pivot.rotation.x = s.incline;
+
+      const orbitMat = new THREE.MeshBasicMaterial({
+        color: s.color,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+      });
+      satelliteRingMats.push(orbitMat);
+      const orbit = new THREE.Mesh(
+        new THREE.TorusGeometry(EARTH_RADIUS * s.radius, 0.003, 6, 64),
+        orbitMat
+      );
+      pivot.add(orbit);
+
+      // spin is a child of pivot (so it inherits the incline) but gets its
+      // own continuous Y rotation each frame — only this carries the
+      // satellite, so the ring itself never moves.
+      const spin = new THREE.Group();
+      pivot.add(spin);
+
+      const satMat = new THREE.MeshBasicMaterial({ color: s.color });
+      satelliteMats.push(satMat);
+      const sat = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 10), satMat);
+      sat.position.set(EARTH_RADIUS * s.radius, 0, 0);
+      const satGlow = new THREE.PointLight(s.color, 0.4, 0.6, 2);
+      sat.add(satGlow);
+      spin.add(sat);
+
+      scene.add(pivot);
+      return { spin, speed: s.speed };
+    });
+
     // Molten core glow, visible through the translucent ocean shell —
     // pulses with mic/TTS level like the old arc-reactor did.
     const coreLight = new THREE.PointLight(0xfff2d0, 0.6, 3, 2);
@@ -979,6 +1066,9 @@ export default function Globe() {
       ring.rotation.z += 0.0025;
       cloud.rotation.y += 0.0007;
       stars.rotation.y += 0.00015;
+      brightStars.rotation.y += 0.00015;
+      brightStarMat.opacity = 0.6 + Math.sin(performance.now() * 0.0015) * 0.3;
+      satellites.forEach((s) => (s.spin.rotation.y += s.speed));
       root.scale.setScalar(1 + lvl * 0.02);
 
       composer.render();
@@ -1009,6 +1099,10 @@ export default function Globe() {
       tetherMat.dispose();
       starGeo.dispose();
       starMat.dispose();
+      brightStarGeo.dispose();
+      brightStarMat.dispose();
+      satelliteMats.forEach((m) => m.dispose());
+      satelliteRingMats.forEach((m) => m.dispose());
       labelEls.forEach((el) => el.root.remove());
     };
   }, []);
