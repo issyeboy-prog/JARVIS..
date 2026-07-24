@@ -32,6 +32,13 @@ function latLonToVector3(lat: number, lon: number, radius: number, out: THREE.Ve
   return out;
 }
 
+// Same projection used everywhere a lon/lat needs a flat 2D coordinate — the
+// procedural texture canvas, and every mesh's UV attribute — so the drawn
+// continents and the 3D continent pieces always line up exactly.
+function lonLatToUV(lon: number, lat: number): [number, number] {
+  return [(lon + 180) / 360, (lat + 90) / 180];
+}
+
 // Rough, hand-drawn [lon, lat] outlines — recognizable silhouettes, not
 // surveyed coastlines.
 const NORTH_AMERICA = [
@@ -67,8 +74,9 @@ const AUSTRALIA = [
   [126, -32], [115, -34],
 ];
 
-// Each continent gets its own vivid neon hue rather than one flat land
-// color — a "poppy" varied palette instead of a monochrome landmass.
+// `color` is an accent only (coastline glow, label text, a faint uniform
+// rim tint) — the landmass fill itself comes from the procedural earth
+// texture below, not a flat color cutout.
 const CONTINENTS: { id: string; name: string; color: number; points: number[][] }[] = [
   { id: "north_america", name: "North America", color: 0x39ff6a, points: NORTH_AMERICA },
   { id: "south_america", name: "South America", color: 0xffe93e, points: SOUTH_AMERICA },
@@ -138,23 +146,31 @@ function buildContinentGeometry(points: number[][], radius: number) {
   centroid.divideScalar(points.length).normalize();
   const restPosition = centroid.clone().multiplyScalar(radius);
 
-  // Vertices come out as (lon, lat, 0) — reproject each onto the sphere,
-  // nudge slightly along the true radial direction for rugged terrain
-  // relief (a real geometric bump, not a texture trick — genuine "3D
-  // texture" that actually catches light differently across the surface),
-  // then re-center on the continent's own rest position so the geometry
+  // Vertices come out as (lon, lat, 0) — the UV for the shared earth
+  // texture is a pure function of that lon/lat, computed before the
+  // position gets overwritten below. Then reproject onto the sphere, nudge
+  // slightly along the true radial direction for subtle terrain relief,
+  // and re-center on the continent's own rest position so the geometry
   // (like the old armor panels) lives in local, origin-relative space and
   // the group's own transform drives the explode offset.
   const pos = geo.attributes.position;
+  const uvArr = new Float32Array(pos.count * 2);
   const v = new THREE.Vector3();
   const n = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
-    latLonToVector3(pos.getY(i), pos.getX(i), radius, v);
+    const lon = pos.getX(i);
+    const lat = pos.getY(i);
+    const [u, uvV] = lonLatToUV(lon, lat);
+    uvArr[i * 2] = u;
+    uvArr[i * 2 + 1] = uvV;
+
+    latLonToVector3(lat, lon, radius, v);
     n.copy(v).normalize();
-    v.addScaledVector(n, terrainBump(v) * 0.014);
+    v.addScaledVector(n, terrainBump(v) * 0.008);
     v.sub(restPosition);
     pos.setXYZ(i, v.x, v.y, v.z);
   }
+  geo.setAttribute("uv", new THREE.BufferAttribute(uvArr, 2));
   pos.needsUpdate = true;
   // The subdivided fill is non-indexed (each triangle owns unique verts),
   // so computeVertexNormals alone gives flat per-triangle normals. Welding
@@ -219,6 +235,202 @@ function addSurfaceBump(geo: THREE.BufferGeometry, amplitude: number) {
   }
   pos.needsUpdate = true;
   geo.computeVertexNormals();
+}
+
+// A hand-rolled lat/lon grid sphere instead of THREE.SphereGeometry — its
+// own internal UV parameterization doesn't line up with lonLatToUV (and by
+// extension the continent pieces built from the same formula), which would
+// leave the base globe's texture rotated relative to where the landmasses
+// actually sit in 3D. Building it from latLonToVector3/lonLatToUV directly
+// guarantees the texture and the continent pieces always agree.
+function buildLatLonSphereGeometry(radius: number, lonSegs: number, latSegs: number): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const v = new THREE.Vector3();
+  for (let iy = 0; iy <= latSegs; iy++) {
+    const lat = 90 - (iy / latSegs) * 180;
+    for (let ix = 0; ix <= lonSegs; ix++) {
+      const lon = -180 + (ix / lonSegs) * 360;
+      latLonToVector3(lat, lon, radius, v);
+      positions.push(v.x, v.y, v.z);
+      const [u, uvV] = lonLatToUV(lon, lat);
+      uvs.push(u, uvV);
+    }
+  }
+  const rowSize = lonSegs + 1;
+  for (let iy = 0; iy < latSegs; iy++) {
+    for (let ix = 0; ix < lonSegs; ix++) {
+      const a = iy * rowSize + ix;
+      const b = a + rowSize;
+      const c = a + 1;
+      const d = b + 1;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Procedurally painted terrain — mottled greens/tans/browns within each
+// continent's real outline, ocean depth variation, and polar ice — a
+// genuine textured look instead of a flat color fill per landmass. No
+// external texture asset (this sandbox's network policy blocks fetching
+// one to verify against), but a real color-varied surface either way.
+function buildEarthTexture(): HTMLCanvasElement {
+  const W = 1024;
+  const H = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  const oceanGrad = ctx.createLinearGradient(0, 0, 0, H);
+  oceanGrad.addColorStop(0, "#0a2a5c");
+  oceanGrad.addColorStop(0.5, "#0d3d7a");
+  oceanGrad.addColorStop(1, "#0a2a5c");
+  ctx.fillStyle = oceanGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  let seed = 7;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+
+  for (let i = 0; i < 220; i++) {
+    const x = rand() * W;
+    const y = rand() * H;
+    const r = 15 + rand() * 45;
+    const shade = rand() > 0.5 ? "rgba(60,150,225,0.10)" : "rgba(5,20,50,0.16)";
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, shade);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const project = (lon: number, lat: number): [number, number] => [
+    ((lon + 180) / 360) * W,
+    ((90 - lat) / 180) * H,
+  ];
+  const EARTH_TONES = ["#2e6b34", "#3c8244", "#7a9e3f", "#b79a53", "#8a5a35", "#5f7a3a"];
+
+  CONTINENTS.forEach((c) => {
+    ctx.save();
+    ctx.beginPath();
+    c.points.forEach(([lon, lat], i) => {
+      const [x, y] = project(lon, lat);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.clip();
+
+    const xs = c.points.map((p) => project(p[0], p[1])[0]);
+    const ys = c.points.map((p) => project(p[0], p[1])[1]);
+    const minX = Math.min(...xs) - 6;
+    const maxX = Math.max(...xs) + 6;
+    const minY = Math.min(...ys) - 6;
+    const maxY = Math.max(...ys) + 6;
+
+    ctx.fillStyle = EARTH_TONES[1];
+    ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+
+    // Base mottling — the terrain color patches themselves.
+    for (let i = 0; i < 140; i++) {
+      const x = minX + rand() * (maxX - minX);
+      const y = minY + rand() * (maxY - minY);
+      const r = 5 + rand() * 20;
+      const tone = EARTH_TONES[Math.floor(rand() * EARTH_TONES.length)];
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `${tone}cc`);
+      g.addColorStop(1, `${tone}00`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * 0.7, rand() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Darker shadow blotches and lighter highlight blotches — raises the
+    // contrast range so the mottling actually reads at a glance instead of
+    // sitting in one narrow mid-tone band.
+    for (let i = 0; i < 55; i++) {
+      const x = minX + rand() * (maxX - minX);
+      const y = minY + rand() * (maxY - minY);
+      const r = 10 + rand() * 30;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, "rgba(10,20,10,0.22)");
+      g.addColorStop(1, "rgba(10,20,10,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * 0.6, rand() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < 35; i++) {
+      const x = minX + rand() * (maxX - minX);
+      const y = minY + rand() * (maxY - minY);
+      const r = 6 + rand() * 16;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, "rgba(220,215,170,0.28)");
+      g.addColorStop(1, "rgba(220,215,170,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * 0.6, rand() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Thin mountain-ridge-like squiggles for fine detail at close range.
+    ctx.strokeStyle = "rgba(40,35,25,0.35)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 10; i++) {
+      let x = minX + rand() * (maxX - minX);
+      let y = minY + rand() * (maxY - minY);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      const segs = 4 + Math.floor(rand() * 4);
+      for (let s = 0; s < segs; s++) {
+        x += (rand() - 0.5) * 40;
+        y += (rand() - 0.5) * 40;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // Sparse warm city-light dots — a handful of small clustered clusters
+    // rather than a uniform scatter, reading as settlements not static.
+    for (let cluster = 0; cluster < 5; cluster++) {
+      const cx = minX + rand() * (maxX - minX);
+      const cy = minY + rand() * (maxY - minY);
+      const count = 4 + Math.floor(rand() * 8);
+      for (let i = 0; i < count; i++) {
+        const x = cx + (rand() - 0.5) * 18;
+        const y = cy + (rand() - 0.5) * 18;
+        ctx.fillStyle = "rgba(255,232,170,0.9)";
+        ctx.beginPath();
+        ctx.arc(x, y, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  });
+
+  const iceTop = ctx.createLinearGradient(0, 0, 0, H * 0.12);
+  iceTop.addColorStop(0, "rgba(255,255,255,0.9)");
+  iceTop.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = iceTop;
+  ctx.fillRect(0, 0, W, H * 0.12);
+  const iceBottom = ctx.createLinearGradient(0, H * 0.88, 0, H);
+  iceBottom.addColorStop(0, "rgba(255,255,255,0)");
+  iceBottom.addColorStop(1, "rgba(255,255,255,0.9)");
+  ctx.fillStyle = iceBottom;
+  ctx.fillRect(0, H * 0.88, W, H * 0.12);
+
+  return canvas;
 }
 
 const EARTH_RADIUS = 1.0;
@@ -371,6 +583,46 @@ export default function Globe() {
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     renderer.setClearColor(0x000000, 0);
 
+    // Starfield backdrop — scattered points on a large fixed shell far
+    // behind the globe, with a very slow independent drift for a subtle
+    // sense of depth. Otherwise the space around the globe is just flat
+    // black, which is a big part of why the scene reads as bland.
+    const STAR_COUNT = 700;
+    const starPositions = new Float32Array(STAR_COUNT * 3);
+    const starColors = new Float32Array(STAR_COUNT * 3);
+    const starTmp = new THREE.Vector3();
+    const starColorPalette = [
+      new THREE.Color(0xffffff),
+      new THREE.Color(0xcfe8ff),
+      new THREE.Color(0xfff2d0),
+    ];
+    for (let i = 0; i < STAR_COUNT; i++) {
+      starTmp
+        .set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1)
+        .normalize()
+        .multiplyScalar(16 + Math.random() * 10);
+      starPositions[i * 3] = starTmp.x;
+      starPositions[i * 3 + 1] = starTmp.y;
+      starPositions[i * 3 + 2] = starTmp.z;
+      const c = starColorPalette[Math.floor(Math.random() * starColorPalette.length)];
+      starColors[i * 3] = c.r;
+      starColors[i * 3 + 1] = c.g;
+      starColors[i * 3 + 2] = c.b;
+    }
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
+    starGeo.setAttribute("color", new THREE.BufferAttribute(starColors, 3));
+    const starMat = new THREE.PointsMaterial({
+      size: 0.05,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.85,
+      sizeAttenuation: true,
+      depthWrite: false,
+    });
+    const stars = new THREE.Points(starGeo, starMat);
+    scene.add(stars);
+
     // Warm near-white "sunlight" key + a deep-blue fill on the far side —
     // reads as an actual lit planet instead of flat cyberpunk two-tone.
     scene.add(new THREE.HemisphereLight(0xdbefff, 0x0a0f1a, 0.55));
@@ -384,21 +636,28 @@ export default function Globe() {
     const root = new THREE.Group();
     scene.add(root);
 
+    // The shared procedural terrain texture — real mottled color detail
+    // rather than a flat cutout fill, used as `map` on both the ocean
+    // shell and every continent piece below (all built from the same
+    // lon/lat projection, so the texture and geometry always line up).
+    const earthTex = new THREE.CanvasTexture(buildEarthTexture());
+    earthTex.colorSpace = THREE.SRGBColorSpace;
+
     const oceanMat = new THREE.MeshPhysicalMaterial({
-      color: 0x04255c,
+      map: earthTex,
       emissive: OCEAN_HEX,
-      emissiveIntensity: 0.28,
-      metalness: 0.15,
-      roughness: 0.3,
+      emissiveIntensity: 0.12,
+      metalness: 0.1,
+      roughness: 0.35,
       transparent: true,
-      opacity: 0.4,
-      transmission: 0.35,
+      opacity: 0.92,
+      transmission: 0.12,
       thickness: 0.6,
-      clearcoat: 0.3,
+      clearcoat: 0.35,
       side: THREE.DoubleSide,
     });
-    const oceanGeo = new THREE.SphereGeometry(EARTH_RADIUS, 96, 64);
-    addSurfaceBump(oceanGeo, 0.018);
+    const oceanGeo = buildLatLonSphereGeometry(EARTH_RADIUS, 96, 64);
+    addSurfaceBump(oceanGeo, 0.01);
     const ocean = new THREE.Mesh(oceanGeo, oceanMat);
     root.add(ocean);
 
@@ -476,15 +735,18 @@ export default function Globe() {
     CONTINENTS.forEach((c, i) => {
       const { geo, edgeGeo, restPosition, explodeDir } = buildContinentGeometry(c.points, EARTH_RADIUS * 1.006);
 
+      // The neon hue is now just an accent — a faint uniform rim tint on
+      // the textured fill, plus the coastline outline/label glow below —
+      // not the landmass's actual color anymore.
       const baseColor = new THREE.Color(c.color);
       const landMat = new THREE.MeshPhysicalMaterial({
-        color: baseColor.clone().multiplyScalar(0.22),
+        map: earthTex,
         emissive: baseColor,
-        emissiveIntensity: 0.55,
-        metalness: 0.1,
-        roughness: 0.4,
+        emissiveIntensity: 0.1,
+        metalness: 0.05,
+        roughness: 0.45,
         transparent: true,
-        opacity: 0.88,
+        opacity: 0.97,
         side: THREE.DoubleSide,
       });
       const landEdgeMat = new THREE.LineBasicMaterial({
@@ -508,10 +770,10 @@ export default function Globe() {
         labelRoot.style.cssText =
           "position:absolute; left:0; top:0; opacity:0; text-align:center; will-change:transform,opacity;";
 
+        const accentHex = `#${c.color.toString(16).padStart(6, "0")}`;
         const nameEl = document.createElement("div");
         nameEl.textContent = c.name.toUpperCase();
-        nameEl.style.cssText =
-          "font:600 10px/1.2 ui-monospace,monospace; letter-spacing:0.15em; color:#eafff2; text-shadow:0 0 6px rgba(57,255,106,0.85),0 1px 3px rgba(0,0,0,0.9); white-space:nowrap; transform:translateX(-50%);";
+        nameEl.style.cssText = `font:600 10px/1.2 ui-monospace,monospace; letter-spacing:0.15em; color:#eafff2; text-shadow:0 0 6px ${accentHex}d9,0 1px 3px rgba(0,0,0,0.9); white-space:nowrap; transform:translateX(-50%);`;
 
         const newsEl = document.createElement("div");
         newsEl.textContent = "";
@@ -710,12 +972,13 @@ export default function Globe() {
       tetherGeo.attributes.position.needsUpdate = true;
       tetherMat.opacity = 0.2 * Math.min(1, explode * 3);
 
-      oceanMat.emissiveIntensity = 0.2 + lvl * 0.3;
-      landMats.forEach((m) => (m.emissiveIntensity = 0.5 + lvl * 0.35));
+      oceanMat.emissiveIntensity = 0.08 + lvl * 0.15;
+      landMats.forEach((m) => (m.emissiveIntensity = 0.1 + lvl * 0.2));
       coreLight.intensity = (0.5 + lvl * 1.1) * (1 - explode * 0.3);
       bloom.strength = 0.4 + lvl * 0.35;
       ring.rotation.z += 0.0025;
       cloud.rotation.y += 0.0007;
+      stars.rotation.y += 0.00015;
       root.scale.setScalar(1 + lvl * 0.02);
 
       composer.render();
@@ -729,6 +992,7 @@ export default function Globe() {
       composer.dispose();
       renderer.dispose();
       haloTex.dispose();
+      earthTex.dispose();
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
           obj.geometry.dispose();
@@ -743,6 +1007,8 @@ export default function Globe() {
       atmoMat.dispose();
       ringMat.dispose();
       tetherMat.dispose();
+      starGeo.dispose();
+      starMat.dispose();
       labelEls.forEach((el) => el.root.remove());
     };
   }, []);
