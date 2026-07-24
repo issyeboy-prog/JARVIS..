@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
@@ -13,102 +12,176 @@ import {
   type HandPoint,
 } from "@/lib/handGestures";
 
-// --- Body-space armor rig -------------------------------------------------
+// --- Holographic Earth -----------------------------------------------------
 //
-// An original, hand-authored armor design — no licensed model or ripped
-// assets, just primitive geometry (rounded panels, rings, spheres) built
-// into a loose y-up body rig and rendered with real lighting/materials
-// instead of flat wireframe lines. Each part knows its own "explode
-// direction" — its rest position relative to a central core — so a peace
-// sign can space every piece outward along a natural radial path (an
-// exhibit's exploded diagram) and a fist pulls it back together, both
-// driven by actual Object3D transforms rather than manual per-frame
-// projection math.
+// A glass/wireframe globe with hand-authored continent outlines (rough but
+// recognizable equirectangular polygons, not a licensed dataset or texture)
+// draped over its surface. Each continent is its own Object3D, built by
+// triangulating its outline flat (via THREE.Shape/ShapeGeometry, in lon/lat
+// space) and then remapping every vertex onto the sphere — so a peace sign
+// can lift each landmass off the globe along its own outward normal, and a
+// fist pulls them back down, the same explode/reassemble rig used before.
 
-// Three part shapes instead of one flat "box for everything" — that
-// uniformity was the biggest source of the "crappy blocks" look. Limbs
-// taper (cylinders with different top/bottom radii — a box physically
-// can't do this), shoulders/helmet crown are domed (spheres), and only
-// the genuinely flat-plate parts (chest, abdomen, jaw, boots) stay boxes.
-type PartDef =
-  | { id: string; shape: "box"; center: THREE.Vector3; half: THREE.Vector3 }
-  | {
-      id: string;
-      shape: "taper";
-      center: THREE.Vector3;
-      radiusTop: number;
-      radiusBottom: number;
-      height: number;
-    }
-  | { id: string; shape: "dome"; center: THREE.Vector3; radius: number; squash: number };
-
-const CORE = new THREE.Vector3(0, 0.45, 0);
-
-const PART_DEFS: PartDef[] = [
-  { id: "head_dome", shape: "dome", center: new THREE.Vector3(0, 1.22, 0), radius: 0.15, squash: 0.82 },
-  { id: "head_jaw", shape: "box", center: new THREE.Vector3(0, 1.03, 0.02), half: new THREE.Vector3(0.12, 0.09, 0.155) },
-  { id: "chest", shape: "box", center: new THREE.Vector3(0, 0.62, 0), half: new THREE.Vector3(0.36, 0.4, 0.24) },
-  { id: "abdomen", shape: "box", center: new THREE.Vector3(0, 0.14, 0), half: new THREE.Vector3(0.27, 0.18, 0.2) },
-
-  { id: "shoulderL", shape: "dome", center: new THREE.Vector3(-0.5, 0.74, 0.01), radius: 0.16, squash: 0.75 },
-  { id: "armL_upper", shape: "taper", center: new THREE.Vector3(-0.52, 0.42, 0), radiusTop: 0.115, radiusBottom: 0.08, height: 0.44 },
-  { id: "armL_fore", shape: "taper", center: new THREE.Vector3(-0.56, 0.02, 0), radiusTop: 0.09, radiusBottom: 0.07, height: 0.38 },
-  { id: "armL_hand", shape: "taper", center: new THREE.Vector3(-0.58, -0.28, 0), radiusTop: 0.065, radiusBottom: 0.095, height: 0.2 },
-  { id: "shoulderR", shape: "dome", center: new THREE.Vector3(0.5, 0.74, 0.01), radius: 0.16, squash: 0.75 },
-  { id: "armR_upper", shape: "taper", center: new THREE.Vector3(0.52, 0.42, 0), radiusTop: 0.115, radiusBottom: 0.08, height: 0.44 },
-  { id: "armR_fore", shape: "taper", center: new THREE.Vector3(0.56, 0.02, 0), radiusTop: 0.09, radiusBottom: 0.07, height: 0.38 },
-  { id: "armR_hand", shape: "taper", center: new THREE.Vector3(0.58, -0.28, 0), radiusTop: 0.065, radiusBottom: 0.095, height: 0.2 },
-
-  { id: "legL_thigh", shape: "taper", center: new THREE.Vector3(-0.18, -0.38, 0), radiusTop: 0.16, radiusBottom: 0.11, height: 0.52 },
-  { id: "legL_shin", shape: "taper", center: new THREE.Vector3(-0.18, -0.85, 0), radiusTop: 0.115, radiusBottom: 0.095, height: 0.48 },
-  { id: "legL_foot", shape: "box", center: new THREE.Vector3(-0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
-  { id: "legR_thigh", shape: "taper", center: new THREE.Vector3(0.18, -0.38, 0), radiusTop: 0.16, radiusBottom: 0.11, height: 0.52 },
-  { id: "legR_shin", shape: "taper", center: new THREE.Vector3(0.18, -0.85, 0), radiusTop: 0.115, radiusBottom: 0.095, height: 0.48 },
-  { id: "legR_foot", shape: "box", center: new THREE.Vector3(0.18, -1.15, 0.06), half: new THREE.Vector3(0.12, 0.07, 0.19) },
-];
-
-interface JointDef {
-  position: THREE.Vector3;
-  followPartId: string;
+function latLonToVector3(lat: number, lon: number, radius: number, out: THREE.Vector3): THREE.Vector3 {
+  const phi = ((90 - lat) * Math.PI) / 180;
+  const theta = ((lon + 180) * Math.PI) / 180;
+  out.x = -radius * Math.sin(phi) * Math.cos(theta);
+  out.y = radius * Math.cos(phi);
+  out.z = radius * Math.sin(phi) * Math.sin(theta);
+  return out;
 }
 
-// Small sensor rings at the joints — shoulders, elbows, wrists, hips,
-// knees, ankles, neck. Parented to whichever part they anchor to, so
-// they travel with it automatically during explode/reassemble.
-const JOINT_DEFS: JointDef[] = [
-  { position: new THREE.Vector3(0, 0.96, 0.03), followPartId: "head_jaw" },
-  { position: new THREE.Vector3(-0.5, 0.6, 0.02), followPartId: "shoulderL" },
-  { position: new THREE.Vector3(0.5, 0.6, 0.02), followPartId: "shoulderR" },
-  { position: new THREE.Vector3(-0.55, 0.2, 0), followPartId: "armL_fore" },
-  { position: new THREE.Vector3(0.55, 0.2, 0), followPartId: "armR_fore" },
-  { position: new THREE.Vector3(-0.57, -0.15, 0), followPartId: "armL_hand" },
-  { position: new THREE.Vector3(0.57, -0.15, 0), followPartId: "armR_hand" },
-  { position: new THREE.Vector3(-0.18, -0.13, 0.02), followPartId: "legL_thigh" },
-  { position: new THREE.Vector3(0.18, -0.13, 0.02), followPartId: "legR_thigh" },
-  { position: new THREE.Vector3(-0.18, -0.62, 0), followPartId: "legL_shin" },
-  { position: new THREE.Vector3(0.18, -0.62, 0), followPartId: "legR_shin" },
-  { position: new THREE.Vector3(-0.18, -1.0, 0.05), followPartId: "legL_foot" },
-  { position: new THREE.Vector3(0.18, -1.0, 0.05), followPartId: "legR_foot" },
+// Rough, hand-drawn [lon, lat] outlines — recognizable silhouettes, not
+// surveyed coastlines.
+const NORTH_AMERICA = [
+  [-165, 65], [-140, 70], [-95, 75], [-75, 70], [-60, 50], [-52, 47],
+  [-65, 45], [-80, 25], [-97, 18], [-105, 20], [-115, 30], [-124, 40],
+  [-125, 49], [-140, 60],
+];
+const SOUTH_AMERICA = [
+  [-77, 10], [-60, 10], [-50, 0], [-35, -5], [-38, -15], [-40, -23],
+  [-48, -25], [-58, -34], [-68, -52], [-72, -45], [-70, -30], [-75, -15],
+  [-81, -4],
+];
+const AFRICA = [
+  [-17, 15], [-16, 21], [-10, 30], [0, 37], [10, 37], [20, 33], [32, 31],
+  [35, 27], [43, 12], [51, 12], [49, -1], [40, -15], [35, -25], [30, -30],
+  [20, -35], [15, -27], [12, -18], [13, -5], [8, 4], [-5, 5], [-10, 10],
+];
+const EUROPE = [
+  [-9, 38], [-8, 43], [-1, 43], [3, 43], [7, 44], [12, 42], [15, 38],
+  [20, 40], [27, 41], [30, 45], [28, 54], [30, 60], [20, 65], [10, 63],
+  [5, 58], [-5, 50], [-10, 44],
+];
+const ASIA = [
+  [30, 45], [40, 42], [48, 40], [55, 25], [60, 25], [65, 25], [70, 20],
+  [78, 8], [80, 15], [90, 22], [95, 20], [100, 10], [103, 1], [105, 10],
+  [110, 20], [120, 25], [122, 31], [120, 36], [130, 38], [140, 45],
+  [160, 60], [170, 65], [150, 70], [120, 75], [100, 78], [80, 73],
+  [60, 70], [50, 68], [40, 66], [35, 55],
+];
+const AUSTRALIA = [
+  [113, -22], [122, -18], [130, -12], [136, -12], [142, -11], [145, -16],
+  [148, -20], [153, -27], [153, -32], [150, -37], [140, -38], [132, -32],
+  [126, -32], [115, -34],
 ];
 
-// Glowing "eye slit" points on the jaw plate.
-const EYE_DEFS = [
-  new THREE.Vector3(-0.055, 1.05, 0.16),
-  new THREE.Vector3(0.055, 1.05, 0.16),
+const CONTINENTS: { id: string; points: number[][] }[] = [
+  { id: "north_america", points: NORTH_AMERICA },
+  { id: "south_america", points: SOUTH_AMERICA },
+  { id: "africa", points: AFRICA },
+  { id: "europe", points: EUROPE },
+  { id: "asia", points: ASIA },
+  { id: "australia", points: AUSTRALIA },
 ];
+
+// Ear-clipping a concave coastline (every real one) sometimes needs a
+// triangle whose edge is a long diagonal cutting across the polygon — fine
+// in flat 2D, but that diagonal's endpoints can be many degrees of lon/lat
+// apart. Projected straight onto the sphere as a single flat triangle, a
+// span that wide reads as a wild spike instead of a coastline. Subdividing
+// each triangle (in flat lon/lat space, where it's cheap and exact) before
+// projecting keeps every triangle's angular span small, so the sphere
+// projection stays smooth.
+function subdivideFlat(positions: ArrayLike<number>, times: number): Float32Array {
+  let pos: ArrayLike<number> = positions;
+  for (let t = 0; t < times; t++) {
+    const triCount = pos.length / 9;
+    const out = new Float32Array(triCount * 4 * 9);
+    let o = 0;
+    const mid = (i: number, j: number, arr: ArrayLike<number>) => [
+      (arr[i] + arr[j]) / 2,
+      (arr[i + 1] + arr[j + 1]) / 2,
+      (arr[i + 2] + arr[j + 2]) / 2,
+    ];
+    for (let i = 0; i < triCount; i++) {
+      const b = i * 9;
+      const A = [pos[b], pos[b + 1], pos[b + 2]];
+      const B = [pos[b + 3], pos[b + 4], pos[b + 5]];
+      const C = [pos[b + 6], pos[b + 7], pos[b + 8]];
+      const AB = mid(b, b + 3, pos);
+      const BC = mid(b + 3, b + 6, pos);
+      const CA = mid(b + 6, b, pos);
+      const tris = [
+        [A, AB, CA],
+        [B, BC, AB],
+        [C, CA, BC],
+        [AB, BC, CA],
+      ];
+      tris.forEach(([p1, p2, p3]) => {
+        out[o++] = p1[0]; out[o++] = p1[1]; out[o++] = p1[2];
+        out[o++] = p2[0]; out[o++] = p2[1]; out[o++] = p2[2];
+        out[o++] = p3[0]; out[o++] = p3[1]; out[o++] = p3[2];
+      });
+    }
+    pos = out;
+  }
+  return pos as Float32Array;
+}
+
+function buildContinentGeometry(points: number[][], radius: number) {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) shape.lineTo(points[i][0], points[i][1]);
+  shape.closePath();
+  const flat = new THREE.ShapeGeometry(shape).toNonIndexed();
+  const subdivided = subdivideFlat(flat.attributes.position.array, 2);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(subdivided, 3));
+
+  const centroid = new THREE.Vector3();
+  const tmp = new THREE.Vector3();
+  points.forEach(([lon, lat]) => centroid.add(latLonToVector3(lat, lon, 1, tmp)));
+  centroid.divideScalar(points.length).normalize();
+  const restPosition = centroid.clone().multiplyScalar(radius);
+
+  // Vertices come out as (lon, lat, 0) — reproject each onto the sphere,
+  // then re-center on the continent's own rest position so the geometry
+  // (like the old armor panels) lives in local, origin-relative space and
+  // the group's own transform drives the explode offset.
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    latLonToVector3(pos.getY(i), pos.getX(i), radius, v).sub(restPosition);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  // The coastline outline is built from the original boundary points, not
+  // the subdivided fill — an EdgesGeometry on the fill would trace every
+  // internal triangulation seam, not just the coast. Each edge is linearly
+  // interpolated in lon/lat before projecting, for a smooth curved line
+  // instead of one long chord per original point.
+  const outlineVerts: number[] = [];
+  const segs = 6;
+  const ov = new THREE.Vector3();
+  for (let i = 0; i < points.length; i++) {
+    const [lon1, lat1] = points[i];
+    const [lon2, lat2] = points[(i + 1) % points.length];
+    for (let s = 0; s < segs; s++) {
+      const t = s / segs;
+      latLonToVector3(lat1 + (lat2 - lat1) * t, lon1 + (lon2 - lon1) * t, radius, ov).sub(restPosition);
+      outlineVerts.push(ov.x, ov.y, ov.z);
+    }
+  }
+  const edgeGeo = new THREE.BufferGeometry();
+  edgeGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(outlineVerts), 3));
+
+  return { geo, edgeGeo, restPosition, explodeDir: centroid.clone() };
+}
 
 function hash(i: number): number {
   const x = Math.sin(i * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
 
-// How far a fully-exploded part travels from its assembled position, in
-// body-space units.
-const EXPLODE_DIST = 0.62;
-const PANEL_RADIUS = 0.03;
-const HUE_HEX = 0x38bdf8; // cyan, matching the rest of the holographic UI
-const EDGE_HEX = 0x7dd3fc;
-const REACTOR_HEX = 0xf5a524; // warm amber accent
+const EARTH_RADIUS = 1.0;
+const EXPLODE_DIST = 0.8;
+const OCEAN_HEX = 0x38bdf8; // cyan, matches the rest of the holographic UI
+const LAND_HEX = 0xff2bd6; // neon magenta — the cyberpunk accent
+const LAND_EDGE_HEX = 0xff9df0;
+const ATMO_HEX = 0x8b5cf6;
 
 // --- Component -----------------------------------------------------------
 
@@ -140,7 +213,7 @@ export default function Globe() {
   const rotVelRef = useRef({ x: 0, y: 0 });
 
   const lastHandPosRef = useRef<HandPoint | null>(null);
-  // 0 = assembled suit, 1 = fully exploded/examined.
+  // 0 = assembled globe, 1 = continents fully lifted off the surface.
   const explodeTargetRef = useRef(0);
   const explodeRef = useRef(0);
 
@@ -203,12 +276,12 @@ export default function Globe() {
           }
           lastHandPosRef.current = drive;
         },
-        // Peace sign: space every armor part outward, like examining an
-        // exploded diagram of the suit.
+        // Peace sign: lift every continent off the globe's surface, like
+        // examining an exploded diagram of the planet.
         onPeaceSign: () => {
           explodeTargetRef.current = 1;
         },
-        // Closed fist: pull everything back into the assembled suit.
+        // Closed fist: settle every continent back onto the globe.
         onFist: () => {
           explodeTargetRef.current = 0;
         },
@@ -230,137 +303,125 @@ export default function Globe() {
     if (!canvas) return;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 50);
-    camera.position.set(0, 0.02, 4.7);
-    camera.lookAt(0, 0.05, 0);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
+    camera.position.set(0, 0, 4.2);
+    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     renderer.setClearColor(0x000000, 0);
 
-    // Lighting — soft fill plus a cool key light and a warm rim, so the
-    // panels actually catch highlights as they rotate rather than reading
-    // as a flat silhouette.
-    scene.add(new THREE.HemisphereLight(0x8fd9ff, 0x0a0f1a, 0.55));
-    const key = new THREE.DirectionalLight(0x8fe0ff, 1.2);
+    // Two-tone cyberpunk lighting — cool cyan key light on one side, hot
+    // magenta rim light on the other — instead of a single neutral fill.
+    scene.add(new THREE.HemisphereLight(0x66d9ff, 0x0a0f1a, 0.5));
+    const key = new THREE.DirectionalLight(0x8fe0ff, 1.1);
     key.position.set(1.6, 2.2, 2.4);
     scene.add(key);
-    const rimLight = new THREE.PointLight(0x66eaff, 1.4, 8, 2);
+    const rimLight = new THREE.PointLight(LAND_HEX, 1.2, 8, 2);
     rimLight.position.set(-1.8, 0.6, -1.6);
     scene.add(rimLight);
 
     const root = new THREE.Group();
     scene.add(root);
 
-    const armorMat = new THREE.MeshPhysicalMaterial({
-      color: 0x123246,
-      emissive: HUE_HEX,
-      emissiveIntensity: 0.16,
-      metalness: 0.55,
-      roughness: 0.25,
-      clearcoat: 0.6,
-      clearcoatRoughness: 0.25,
+    const oceanMat = new THREE.MeshPhysicalMaterial({
+      color: 0x0a1c3d,
+      emissive: OCEAN_HEX,
+      emissiveIntensity: 0.22,
+      metalness: 0.2,
+      roughness: 0.35,
       transparent: true,
-      opacity: 0.72,
-      transmission: 0.03,
-      thickness: 0.3,
+      opacity: 0.32,
+      transmission: 0.4,
+      thickness: 0.6,
+      clearcoat: 0.4,
       side: THREE.DoubleSide,
     });
-    const edgeMat = new THREE.LineBasicMaterial({
-      color: EDGE_HEX,
+    const ocean = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 48, 32), oceanMat);
+    root.add(ocean);
+
+    // A low-poly sphere's EdgesGeometry naturally reads as a lat/lon grid.
+    const gridMat = new THREE.LineBasicMaterial({ color: OCEAN_HEX, transparent: true, opacity: 0.4 });
+    const grid = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.SphereGeometry(EARTH_RADIUS * 1.002, 18, 12)),
+      gridMat
+    );
+    root.add(grid);
+
+    const landMat = new THREE.MeshPhysicalMaterial({
+      color: 0x2a0620,
+      emissive: LAND_HEX,
+      emissiveIntensity: 0.55,
+      metalness: 0.1,
+      roughness: 0.4,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+    });
+    const landEdgeMat = new THREE.LineBasicMaterial({
+      color: LAND_EDGE_HEX,
+      transparent: true,
+      opacity: 0.9,
     });
 
-    interface PartHandle {
-      def: PartDef;
+    interface ContinentHandle {
       group: THREE.Group;
+      restPosition: THREE.Vector3;
       explodeDir: THREE.Vector3;
       explodeScale: number;
     }
-    const parts = new Map<string, PartHandle>();
+    const continents: ContinentHandle[] = [];
 
-    PART_DEFS.forEach((def, i) => {
-      const geo =
-        def.shape === "box"
-          ? new RoundedBoxGeometry(def.half.x * 2, def.half.y * 2, def.half.z * 2, 3, PANEL_RADIUS)
-          : def.shape === "taper"
-            ? new THREE.CylinderGeometry(def.radiusTop, def.radiusBottom, def.height, 8, 1)
-            : new THREE.SphereGeometry(def.radius, 14, 10);
-
-      const mesh = new THREE.Mesh(geo, armorMat);
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), edgeMat);
-      // Domed parts (helmet crown, pauldrons) are squashed spheres — the
-      // squash only applies to the visible shape, not the pivot group, so
-      // joints/eyes/reactor attached to the group below stay unsquashed.
-      const shapeGroup = new THREE.Group();
-      shapeGroup.add(mesh, edges);
-      if (def.shape === "dome") shapeGroup.scale.y = def.squash;
-
+    CONTINENTS.forEach((c, i) => {
+      const { geo, edgeGeo, restPosition, explodeDir } = buildContinentGeometry(c.points, EARTH_RADIUS * 1.006);
+      const mesh = new THREE.Mesh(geo, landMat);
+      const edges = new THREE.LineLoop(edgeGeo, landEdgeMat);
       const group = new THREE.Group();
-      group.position.copy(def.center);
-      group.add(shapeGroup);
+      group.position.copy(restPosition);
+      group.add(mesh, edges);
       root.add(group);
-
-      const dir = def.center.clone().sub(CORE);
-      if (dir.lengthSq() < 1e-6) dir.set(0, 1, 0);
-      dir.normalize();
-
-      parts.set(def.id, { def, group, explodeDir: dir, explodeScale: 0.8 + hash(i + 900) * 0.4 });
+      continents.push({ group, restPosition, explodeDir, explodeScale: 0.85 + hash(i + 900) * 0.3 });
     });
 
-    const jointGeo = new THREE.TorusGeometry(0.034, 0.008, 8, 20);
-    const jointDotGeo = new THREE.SphereGeometry(0.015, 8, 8);
-    const jointMat = new THREE.MeshBasicMaterial({ color: EDGE_HEX, transparent: true, opacity: 0.9 });
-    JOINT_DEFS.forEach((jd) => {
-      const part = parts.get(jd.followPartId);
-      if (!part) return;
-      const local = jd.position.clone().sub(part.def.center);
-      const ring = new THREE.Mesh(jointGeo, jointMat);
-      ring.position.copy(local);
-      const dot = new THREE.Mesh(jointDotGeo, jointMat);
-      dot.position.copy(local);
-      part.group.add(ring, dot);
-    });
-
-    const eyeGeo = new THREE.SphereGeometry(0.014, 8, 8);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xe6f9ff });
-    const jaw = parts.get("head_jaw");
-    if (jaw) {
-      EYE_DEFS.forEach((ep) => {
-        const eye = new THREE.Mesh(eyeGeo, eyeMat);
-        eye.position.copy(ep.clone().sub(jaw.def.center));
-        jaw.group.add(eye);
-      });
-    }
-
-    const chest = parts.get("chest");
-    let reactorLight: THREE.PointLight | null = null;
-    if (chest && chest.def.shape === "box") {
-      const reactorLocal = new THREE.Vector3(0, 0, chest.def.half.z + 0.015);
-      const reactorMat = new THREE.MeshBasicMaterial({ color: REACTOR_HEX });
-      const core = new THREE.Mesh(new THREE.SphereGeometry(0.032, 12, 12), reactorMat);
-      core.position.copy(reactorLocal);
-      const ring1 = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.006, 8, 24), reactorMat);
-      ring1.position.copy(reactorLocal);
-      const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.005, 8, 24), reactorMat);
-      ring2.position.copy(reactorLocal);
-      chest.group.add(core, ring1, ring2);
-      reactorLight = new THREE.PointLight(REACTOR_HEX, 0.35, 1.1, 2);
-      reactorLight.position.copy(reactorLocal);
-      chest.group.add(reactorLight);
-    }
-
-    // Faint callout tethers from each part's rest position to its current
-    // (possibly exploded) position — root-space, one shared buffer.
-    const tetherPositions = new Float32Array(PART_DEFS.length * 2 * 3);
+    // Faint callout tethers from each continent's rest position to its
+    // current (possibly lifted) position — root-space, one shared buffer.
+    const tetherPositions = new Float32Array(CONTINENTS.length * 2 * 3);
     const tetherGeo = new THREE.BufferGeometry();
     tetherGeo.setAttribute("position", new THREE.BufferAttribute(tetherPositions, 3));
-    const tetherMat = new THREE.LineBasicMaterial({ color: EDGE_HEX, transparent: true, opacity: 0 });
+    const tetherMat = new THREE.LineBasicMaterial({ color: LAND_EDGE_HEX, transparent: true, opacity: 0 });
     const tethers = new THREE.LineSegments(tetherGeo, tetherMat);
     root.add(tethers);
 
-    // Soft ambient halo behind the figure so it reads as one glowing
-    // projection rather than a dozen separately-lit panels.
+    // Outer atmosphere shell — a backside-rendered sphere with additive
+    // blending gives a cheap fresnel-style glow at the rim.
+    const atmoMat = new THREE.MeshBasicMaterial({
+      color: ATMO_HEX,
+      transparent: true,
+      opacity: 0.1,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * 1.18, 32, 24), atmoMat);
+    root.add(atmosphere);
+
+    // Slow, independently-spinning targeting ring — a classic sci-fi HUD
+    // touch, decoupled from the hand-driven rotation.
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: LAND_HEX,
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(EARTH_RADIUS * 1.35, 0.007, 8, 64), ringMat);
+    ring.rotation.x = Math.PI / 2 + 0.2;
+    scene.add(ring);
+
+    // Molten core glow, visible through the translucent ocean shell —
+    // pulses with mic/TTS level like the old arc-reactor did.
+    const coreLight = new THREE.PointLight(LAND_HEX, 0.6, 3, 2);
+    root.add(coreLight);
+
+    // Soft ambient halo so the globe reads as one glowing projection.
     const haloSize = 128;
     const haloCanvas = document.createElement("canvas");
     haloCanvas.width = haloCanvas.height = haloSize;
@@ -369,8 +430,9 @@ export default function Globe() {
       const g = haloCtx.createRadialGradient(
         haloSize / 2, haloSize / 2, 0, haloSize / 2, haloSize / 2, haloSize / 2
       );
-      g.addColorStop(0, "rgba(120,220,255,0.28)");
-      g.addColorStop(1, "rgba(120,220,255,0)");
+      g.addColorStop(0, "rgba(140,230,255,0.3)");
+      g.addColorStop(0.55, "rgba(255,60,220,0.16)");
+      g.addColorStop(1, "rgba(255,60,220,0)");
       haloCtx.fillStyle = g;
       haloCtx.fillRect(0, 0, haloSize, haloSize);
     }
@@ -383,15 +445,15 @@ export default function Globe() {
         blending: THREE.AdditiveBlending,
       })
     );
-    halo.position.set(0, 0.2, -0.4);
-    halo.scale.set(2.7, 2.7, 1);
+    halo.position.set(0, 0, -0.4);
+    halo.scale.set(2.9, 2.9, 1);
     scene.add(halo);
 
-    // Bloom so the emissive bits (eyes, reactor, edge lines) actually
+    // Bloom so the emissive bits (grid lines, landmasses, ring) actually
     // glow instead of just being a flat bright color.
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.4, 0.4, 0.45);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.45, 0.4, 0.4);
     composer.addPass(bloom);
 
     const resize = () => {
@@ -415,7 +477,7 @@ export default function Globe() {
 
       // Slow constant drift so it's never fully static, plus whatever the
       // hand is driving.
-      targetRotRef.current.y += 0.001;
+      targetRotRef.current.y += 0.0012;
 
       // Viscous spring: rendered rotation chases the target with heavy
       // damping and a little overshoot — loose and gooey, not precise.
@@ -434,23 +496,25 @@ export default function Globe() {
       const explode = explodeRef.current;
 
       let ti = 0;
-      parts.forEach((p) => {
-        p.group.position
-          .copy(p.def.center)
-          .addScaledVector(p.explodeDir, explode * EXPLODE_DIST * p.explodeScale);
-        tetherPositions[ti++] = p.def.center.x;
-        tetherPositions[ti++] = p.def.center.y;
-        tetherPositions[ti++] = p.def.center.z;
-        tetherPositions[ti++] = p.group.position.x;
-        tetherPositions[ti++] = p.group.position.y;
-        tetherPositions[ti++] = p.group.position.z;
+      continents.forEach((c) => {
+        c.group.position
+          .copy(c.restPosition)
+          .addScaledVector(c.explodeDir, explode * EXPLODE_DIST * c.explodeScale);
+        tetherPositions[ti++] = c.restPosition.x;
+        tetherPositions[ti++] = c.restPosition.y;
+        tetherPositions[ti++] = c.restPosition.z;
+        tetherPositions[ti++] = c.group.position.x;
+        tetherPositions[ti++] = c.group.position.y;
+        tetherPositions[ti++] = c.group.position.z;
       });
       tetherGeo.attributes.position.needsUpdate = true;
-      tetherMat.opacity = 0.16 * Math.min(1, explode * 3);
+      tetherMat.opacity = 0.2 * Math.min(1, explode * 3);
 
-      armorMat.emissiveIntensity = 0.28 + lvl * 0.35;
-      if (reactorLight) reactorLight.intensity = (1.0 + lvl * 1.2) * (1 - explode * 0.5);
-      bloom.strength = 0.35 + lvl * 0.35;
+      oceanMat.emissiveIntensity = 0.2 + lvl * 0.3;
+      landMat.emissiveIntensity = 0.5 + lvl * 0.35;
+      coreLight.intensity = (0.5 + lvl * 1.1) * (1 - explode * 0.3);
+      bloom.strength = 0.4 + lvl * 0.35;
+      ring.rotation.z += 0.0025;
       root.scale.setScalar(1 + lvl * 0.02);
 
       composer.render();
@@ -465,14 +529,16 @@ export default function Globe() {
       renderer.dispose();
       haloTex.dispose();
       scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
           obj.geometry.dispose();
         }
       });
-      armorMat.dispose();
-      edgeMat.dispose();
-      jointMat.dispose();
-      eyeMat.dispose();
+      oceanMat.dispose();
+      gridMat.dispose();
+      landMat.dispose();
+      landEdgeMat.dispose();
+      atmoMat.dispose();
+      ringMat.dispose();
       tetherMat.dispose();
     };
   }, []);
@@ -518,7 +584,7 @@ export default function Globe() {
       <button
         onClick={toggleHandTracking}
         disabled={handStatus === "starting"}
-        className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-cyan-400/30 bg-black/30 px-4 py-1.5 text-[11px] uppercase tracking-widest text-cyan-200/80 backdrop-blur transition hover:bg-cyan-500/10 disabled:opacity-50"
+        className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-fuchsia-400/30 bg-black/30 px-4 py-1.5 text-[11px] uppercase tracking-widest text-cyan-200/80 backdrop-blur transition hover:bg-fuchsia-500/10 disabled:opacity-50"
       >
         {handLabel[handStatus]}
       </button>
