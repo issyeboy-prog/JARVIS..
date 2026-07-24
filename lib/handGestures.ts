@@ -173,8 +173,16 @@ export async function startHandGestures(
       if (isFist && !wasFist) onFist();
       wasFist = isFist;
 
+      // Excludes hands that also match the two-finger-point shape: that
+      // gesture is deliberately "a peace sign with the fingers held
+      // together," and MediaPipe's Victory classifier doesn't key off
+      // finger spread, so without this a swipe attempt could also fire the
+      // peace-sign explode/collapse toggle.
       const isPeaceSign = result.gestures.some(
-        (g) => g[0]?.categoryName === "Victory" && g[0].score > 0.6
+        (g, i) =>
+          g[0]?.categoryName === "Victory" &&
+          g[0].score > 0.6 &&
+          !isTwoFingerPoint(result.landmarks[i])
       );
       if (isPeaceSign && !wasPeaceSign) onPeaceSign?.();
       wasPeaceSign = isPeaceSign;
