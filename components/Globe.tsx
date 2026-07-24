@@ -66,13 +66,13 @@ const AUSTRALIA = [
   [126, -32], [115, -34],
 ];
 
-const CONTINENTS: { id: string; points: number[][] }[] = [
-  { id: "north_america", points: NORTH_AMERICA },
-  { id: "south_america", points: SOUTH_AMERICA },
-  { id: "africa", points: AFRICA },
-  { id: "europe", points: EUROPE },
-  { id: "asia", points: ASIA },
-  { id: "australia", points: AUSTRALIA },
+const CONTINENTS: { id: string; name: string; points: number[][] }[] = [
+  { id: "north_america", name: "North America", points: NORTH_AMERICA },
+  { id: "south_america", name: "South America", points: SOUTH_AMERICA },
+  { id: "africa", name: "Africa", points: AFRICA },
+  { id: "europe", name: "Europe", points: EUROPE },
+  { id: "asia", name: "Asia", points: ASIA },
+  { id: "australia", name: "Australia", points: AUSTRALIA },
 ];
 
 // Ear-clipping a concave coastline (every real one) sometimes needs a
@@ -178,10 +178,14 @@ function hash(i: number): number {
 
 const EARTH_RADIUS = 1.0;
 const EXPLODE_DIST = 0.8;
-const OCEAN_HEX = 0x38bdf8; // cyan, matches the rest of the holographic UI
-const LAND_HEX = 0xff2bd6; // neon magenta — the cyberpunk accent
-const LAND_EDGE_HEX = 0xff9df0;
-const ATMO_HEX = 0x8b5cf6;
+// Realistic-Earth palette (blue ocean, green land, white cloud/light) rather
+// than the app's usual cyan/magenta duotone — the ring and rim glow below
+// keep a magenta HUD accent, but the planet itself should read as a planet.
+const OCEAN_HEX = 0x1c7dff;
+const LAND_HEX = 0x39ff6a;
+const LAND_EDGE_HEX = 0xb6ffce;
+const ATMO_HEX = 0x4fb2ff;
+const RING_HEX = 0xff2bd6;
 
 // --- Component -----------------------------------------------------------
 
@@ -200,6 +204,7 @@ export default function Globe() {
     useVoice();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const labelLayerRef = useRef<HTMLDivElement>(null);
   const levelRef = useRef(0);
 
   const [handStatus, setHandStatus] = useState<HandStatus>("off");
@@ -310,13 +315,13 @@ export default function Globe() {
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     renderer.setClearColor(0x000000, 0);
 
-    // Two-tone cyberpunk lighting — cool cyan key light on one side, hot
-    // magenta rim light on the other — instead of a single neutral fill.
-    scene.add(new THREE.HemisphereLight(0x66d9ff, 0x0a0f1a, 0.5));
-    const key = new THREE.DirectionalLight(0x8fe0ff, 1.1);
+    // Warm near-white "sunlight" key + a deep-blue fill on the far side —
+    // reads as an actual lit planet instead of flat cyberpunk two-tone.
+    scene.add(new THREE.HemisphereLight(0xdbefff, 0x0a0f1a, 0.55));
+    const key = new THREE.DirectionalLight(0xfff6e8, 0.9);
     key.position.set(1.6, 2.2, 2.4);
     scene.add(key);
-    const rimLight = new THREE.PointLight(LAND_HEX, 1.2, 8, 2);
+    const rimLight = new THREE.PointLight(0x2a6bff, 1.1, 8, 2);
     rimLight.position.set(-1.8, 0.6, -1.6);
     scene.add(rimLight);
 
@@ -324,31 +329,68 @@ export default function Globe() {
     scene.add(root);
 
     const oceanMat = new THREE.MeshPhysicalMaterial({
-      color: 0x0a1c3d,
+      color: 0x04255c,
       emissive: OCEAN_HEX,
-      emissiveIntensity: 0.22,
-      metalness: 0.2,
-      roughness: 0.35,
+      emissiveIntensity: 0.28,
+      metalness: 0.15,
+      roughness: 0.3,
       transparent: true,
-      opacity: 0.32,
-      transmission: 0.4,
+      opacity: 0.4,
+      transmission: 0.35,
       thickness: 0.6,
-      clearcoat: 0.4,
+      clearcoat: 0.3,
       side: THREE.DoubleSide,
     });
     const ocean = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 48, 32), oceanMat);
     root.add(ocean);
 
     // A low-poly sphere's EdgesGeometry naturally reads as a lat/lon grid.
-    const gridMat = new THREE.LineBasicMaterial({ color: OCEAN_HEX, transparent: true, opacity: 0.4 });
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x8fd8ff, transparent: true, opacity: 0.4 });
     const grid = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.SphereGeometry(EARTH_RADIUS * 1.002, 18, 12)),
       gridMat
     );
     root.add(grid);
 
+    // Sparse, randomly-scattered cloud wisps — a canvas noise texture, not a
+    // real cloud dataset, so no lon/lat alignment is needed (real clouds
+    // don't align with land anyway).
+    const cloudCanvas = document.createElement("canvas");
+    cloudCanvas.width = 256;
+    cloudCanvas.height = 128;
+    const cloudCtx = cloudCanvas.getContext("2d");
+    if (cloudCtx) {
+      let seed = 42;
+      const rand = () => {
+        seed = (seed * 16807) % 2147483647;
+        return seed / 2147483647;
+      };
+      for (let i = 0; i < 70; i++) {
+        const x = rand() * cloudCanvas.width;
+        const y = rand() * cloudCanvas.height;
+        const r = 8 + rand() * 22;
+        const g = cloudCtx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, "rgba(255,255,255,0.55)");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        cloudCtx.fillStyle = g;
+        cloudCtx.beginPath();
+        cloudCtx.ellipse(x, y, r, r * 0.6, 0, 0, Math.PI * 2);
+        cloudCtx.fill();
+      }
+    }
+    const cloudTex = new THREE.CanvasTexture(cloudCanvas);
+    const cloudMat = new THREE.MeshBasicMaterial({
+      map: cloudTex,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const cloud = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 32, 24), cloudMat);
+    root.add(cloud);
+
     const landMat = new THREE.MeshPhysicalMaterial({
-      color: 0x2a0620,
+      color: 0x0a3d1a,
       emissive: LAND_HEX,
       emissiveIntensity: 0.55,
       metalness: 0.1,
@@ -364,12 +406,24 @@ export default function Globe() {
     });
 
     interface ContinentHandle {
+      id: string;
       group: THREE.Group;
       restPosition: THREE.Vector3;
       explodeDir: THREE.Vector3;
       explodeScale: number;
     }
     const continents: ContinentHandle[] = [];
+
+    // Name + news-blurb labels are plain DOM, not WebGL — projected onto
+    // screen space every frame from each continent's current (possibly
+    // exploded) world position, so they travel with the explode animation
+    // for free instead of needing their own tween.
+    interface LabelHandle {
+      root: HTMLDivElement;
+      news: HTMLDivElement;
+    }
+    const labelLayer = labelLayerRef.current;
+    const labelEls = new Map<string, LabelHandle>();
 
     CONTINENTS.forEach((c, i) => {
       const { geo, edgeGeo, restPosition, explodeDir } = buildContinentGeometry(c.points, EARTH_RADIUS * 1.006);
@@ -379,8 +433,43 @@ export default function Globe() {
       group.position.copy(restPosition);
       group.add(mesh, edges);
       root.add(group);
-      continents.push({ group, restPosition, explodeDir, explodeScale: 0.85 + hash(i + 900) * 0.3 });
+      continents.push({ id: c.id, group, restPosition, explodeDir, explodeScale: 0.85 + hash(i + 900) * 0.3 });
+
+      if (labelLayer) {
+        const labelRoot = document.createElement("div");
+        labelRoot.style.cssText =
+          "position:absolute; left:0; top:0; opacity:0; text-align:center; will-change:transform,opacity;";
+
+        const nameEl = document.createElement("div");
+        nameEl.textContent = c.name.toUpperCase();
+        nameEl.style.cssText =
+          "font:600 10px/1.2 ui-monospace,monospace; letter-spacing:0.15em; color:#eafff2; text-shadow:0 0 6px rgba(57,255,106,0.85),0 1px 3px rgba(0,0,0,0.9); white-space:nowrap; transform:translateX(-50%);";
+
+        const newsEl = document.createElement("div");
+        newsEl.textContent = "";
+        newsEl.style.cssText =
+          "margin-top:4px; width:150px; font:400 9px/1.35 ui-sans-serif,system-ui,sans-serif; color:#dff1ff; text-shadow:0 1px 3px rgba(0,0,0,0.95); transform:translateX(-50%); opacity:0; transition:opacity 0.4s;";
+
+        labelRoot.appendChild(nameEl);
+        labelRoot.appendChild(newsEl);
+        labelLayer.appendChild(labelRoot);
+        labelEls.set(c.id, { root: labelRoot, news: newsEl });
+      }
     });
+
+    fetch("/api/news")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { continents?: Record<string, { title: string }[]> } | null) => {
+        labelEls.forEach((el, id) => {
+          const headline = data?.continents?.[id]?.[0]?.title;
+          el.news.textContent = headline ?? "Headlines unavailable.";
+        });
+      })
+      .catch(() => {
+        labelEls.forEach((el) => {
+          el.news.textContent = "Headlines unavailable.";
+        });
+      });
 
     // Faint callout tethers from each continent's rest position to its
     // current (possibly lifted) position — root-space, one shared buffer.
@@ -405,9 +494,10 @@ export default function Globe() {
     root.add(atmosphere);
 
     // Slow, independently-spinning targeting ring — a classic sci-fi HUD
-    // touch, decoupled from the hand-driven rotation.
+    // touch, decoupled from the hand-driven rotation. Kept magenta as the
+    // one deliberate cyberpunk accent against an otherwise realistic planet.
     const ringMat = new THREE.MeshBasicMaterial({
-      color: LAND_HEX,
+      color: RING_HEX,
       transparent: true,
       opacity: 0.45,
       side: THREE.DoubleSide,
@@ -418,7 +508,7 @@ export default function Globe() {
 
     // Molten core glow, visible through the translucent ocean shell —
     // pulses with mic/TTS level like the old arc-reactor did.
-    const coreLight = new THREE.PointLight(LAND_HEX, 0.6, 3, 2);
+    const coreLight = new THREE.PointLight(0xfff2d0, 0.6, 3, 2);
     root.add(coreLight);
 
     // Soft ambient halo so the globe reads as one glowing projection.
@@ -430,9 +520,9 @@ export default function Globe() {
       const g = haloCtx.createRadialGradient(
         haloSize / 2, haloSize / 2, 0, haloSize / 2, haloSize / 2, haloSize / 2
       );
-      g.addColorStop(0, "rgba(140,230,255,0.3)");
-      g.addColorStop(0.55, "rgba(255,60,220,0.16)");
-      g.addColorStop(1, "rgba(255,60,220,0)");
+      g.addColorStop(0, "rgba(210,238,255,0.35)");
+      g.addColorStop(0.55, "rgba(70,160,255,0.18)");
+      g.addColorStop(1, "rgba(70,160,255,0)");
       haloCtx.fillStyle = g;
       haloCtx.fillRect(0, 0, haloSize, haloSize);
     }
@@ -456,10 +546,14 @@ export default function Globe() {
     const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.45, 0.4, 0.4);
     composer.addPass(bloom);
 
+    let viewW = 1;
+    let viewH = 1;
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       const w = Math.max(1, rect.width);
       const h = Math.max(1, rect.height);
+      viewW = w;
+      viewH = h;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       renderer.setPixelRatio(dpr);
       renderer.setSize(w, h, false);
@@ -470,6 +564,12 @@ export default function Globe() {
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
+
+    // Reused scratch vectors for the label projection below — avoids an
+    // allocation per continent per frame.
+    const labelWorldPos = new THREE.Vector3();
+    const labelWorldNormal = new THREE.Vector3();
+    const labelCamToPoint = new THREE.Vector3();
 
     let raf = 0;
     const draw = () => {
@@ -491,6 +591,7 @@ export default function Globe() {
       rotRef.current.y += rotVelRef.current.y;
       root.rotation.x = rotRef.current.x;
       root.rotation.y = rotRef.current.y;
+      root.updateMatrixWorld();
 
       explodeRef.current += (explodeTargetRef.current - explodeRef.current) * 0.06;
       const explode = explodeRef.current;
@@ -506,6 +607,35 @@ export default function Globe() {
         tetherPositions[ti++] = c.group.position.x;
         tetherPositions[ti++] = c.group.position.y;
         tetherPositions[ti++] = c.group.position.z;
+
+        // Project this continent's current (possibly exploded) position to
+        // screen space and drive the DOM label there directly — no React
+        // re-render, same as everything else in this loop. Fades out near
+        // the terminator (the continent's own outward normal, rotated into
+        // world space, pointing away from the camera) instead of a hard cut.
+        const label = labelEls.get(c.id);
+        if (label) {
+          labelWorldPos.copy(c.group.position);
+          root.localToWorld(labelWorldPos);
+          labelWorldNormal.copy(c.explodeDir).applyQuaternion(root.quaternion);
+          labelCamToPoint.copy(camera.position).sub(labelWorldPos).normalize();
+          const facing = labelWorldNormal.dot(labelCamToPoint);
+
+          // .project() mutates in place, converting world coords to NDC
+          // (-1..1) plus a depth value — do this after computing `facing`
+          // above, which needed the real world position.
+          labelWorldPos.project(camera);
+          const screenX = (labelWorldPos.x * 0.5 + 0.5) * viewW;
+          const screenY = (-labelWorldPos.y * 0.5 + 0.5) * viewH;
+
+          const fade = THREE.MathUtils.clamp(facing * 3 + 0.3, 0, 1);
+          const visible = labelWorldPos.z < 1 && fade > 0.02;
+          label.root.style.transform = `translate(${screenX}px, ${screenY + 16}px)`;
+          label.root.style.opacity = visible ? String(fade) : "0";
+          label.news.style.opacity = String(
+            THREE.MathUtils.clamp((explode - 0.35) * 4, 0, 1) * fade
+          );
+        }
       });
       tetherGeo.attributes.position.needsUpdate = true;
       tetherMat.opacity = 0.2 * Math.min(1, explode * 3);
@@ -515,6 +645,7 @@ export default function Globe() {
       coreLight.intensity = (0.5 + lvl * 1.1) * (1 - explode * 0.3);
       bloom.strength = 0.4 + lvl * 0.35;
       ring.rotation.z += 0.0025;
+      cloud.rotation.y += 0.0007;
       root.scale.setScalar(1 + lvl * 0.02);
 
       composer.render();
@@ -535,11 +666,14 @@ export default function Globe() {
       });
       oceanMat.dispose();
       gridMat.dispose();
+      cloudTex.dispose();
+      cloudMat.dispose();
       landMat.dispose();
       landEdgeMat.dispose();
       atmoMat.dispose();
       ringMat.dispose();
       tetherMat.dispose();
+      labelEls.forEach((el) => el.root.remove());
     };
   }, []);
 
@@ -563,6 +697,7 @@ export default function Globe() {
       aria-label={status === "inactive" ? "Activate JARVIS" : "Talk to JARVIS"}
     >
       <canvas ref={canvasRef} className="h-full w-full" aria-hidden="true" />
+      <div ref={labelLayerRef} className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true" />
       <video
         ref={videoRef}
         muted

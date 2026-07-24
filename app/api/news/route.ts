@@ -13,6 +13,20 @@ const COUNTRIES = {
 
 type CountryKey = keyof typeof COUNTRIES;
 
+// Keyed to match the continent ids in components/Globe.tsx — the globe
+// shows the single most pressing headline under each continent when it's
+// exploded out for examination.
+const CONTINENTS = {
+  north_america: "North America",
+  south_america: "South America",
+  africa: "Africa",
+  europe: "Europe",
+  asia: "Asia",
+  australia: "Australia",
+} as const;
+
+type ContinentKey = keyof typeof CONTINENTS;
+
 interface Headline {
   title: string;
   link: string;
@@ -47,20 +61,36 @@ async function fetchCountryFeed(query: string): Promise<Headline[]> {
 }
 
 export async function GET() {
-  const entries = Object.entries(COUNTRIES) as [CountryKey, string][];
+  const countryEntries = Object.entries(COUNTRIES) as [CountryKey, string][];
+  const continentEntries = Object.entries(CONTINENTS) as [ContinentKey, string][];
 
-  const results = await Promise.allSettled(
-    entries.map(([, query]) => fetchCountryFeed(query))
-  );
+  const [countryResults, continentResults] = await Promise.all([
+    Promise.allSettled(countryEntries.map(([, query]) => fetchCountryFeed(query))),
+    Promise.allSettled(continentEntries.map(([, query]) => fetchCountryFeed(query))),
+  ]);
 
-  const body: Record<CountryKey, Headline[]> = {
+  const body: Record<CountryKey, Headline[]> & {
+    continents: Record<ContinentKey, Headline[]>;
+  } = {
     usa: [],
     canada: [],
     china: [],
+    continents: {
+      north_america: [],
+      south_america: [],
+      africa: [],
+      europe: [],
+      asia: [],
+      australia: [],
+    },
   };
-  results.forEach((result, i) => {
-    const [key] = entries[i];
+  countryResults.forEach((result, i) => {
+    const [key] = countryEntries[i];
     body[key] = result.status === "fulfilled" ? result.value : [];
+  });
+  continentResults.forEach((result, i) => {
+    const [key] = continentEntries[i];
+    body.continents[key] = result.status === "fulfilled" ? result.value : [];
   });
 
   return NextResponse.json(body);
