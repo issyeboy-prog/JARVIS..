@@ -37,6 +37,10 @@ export interface HandGestureCallbacks {
   // of MediaPipe's built-in gesture categories, so this is detected from
   // raw landmark geometry instead (see isCoyoteShape below).
   onCoyoteSign?: () => void;
+  // Index + middle fingers extended together (not splayed like a peace
+  // sign), ring/pinky curled, swept sideways. Fires once per completed
+  // swipe while the shape is held.
+  onSwipe?: (direction: "left" | "right") => void;
 }
 
 const WASM_URL =
@@ -44,7 +48,7 @@ const WASM_URL =
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task";
 
-const SMOOTHING = 0.55; // higher = snappier/less smooth, lower = smoother/more lag
+const SMOOTHING = 0.7; // higher = snappier/less smooth, lower = smoother/more lag
 
 let recognizerPromise: Promise<GestureRecognizer> | null = null;
 
@@ -96,9 +100,30 @@ function isCoyoteShape(lm: Landmark3[]): boolean {
   return pinchMiddle && pinchRing && indexExtended && pinkyExtended;
 }
 
+// Index + middle extended and held close together (not splayed into a V
+// like a peace sign), ring/pinky curled in, thumb doesn't matter. The
+// "together" check is what keeps this from double-firing alongside a
+// peace sign, which is index+middle extended but spread apart.
+function isTwoFingerPoint(lm: Landmark3[]): boolean {
+  if (lm.length < 21) return false;
+  const scale = dist3(lm[0], lm[9]) || 1;
+  const indexExtended = dist3(lm[0], lm[8]) > dist3(lm[0], lm[6]) * 1.15;
+  const middleExtended = dist3(lm[0], lm[12]) > dist3(lm[0], lm[10]) * 1.15;
+  const ringCurled = dist3(lm[0], lm[16]) < dist3(lm[0], lm[14]) * 1.05;
+  const pinkyCurled = dist3(lm[0], lm[20]) < dist3(lm[0], lm[18]) * 1.05;
+  const fingersTogether = dist3(lm[8], lm[12]) / scale < 0.3;
+  return indexExtended && middleExtended && ringCurled && pinkyCurled && fingersTogether;
+}
+
+// A swipe must cover this much of the frame width, within this long a
+// window, to count — short/slow drift while just holding the pose
+// shouldn't fire anything.
+const SWIPE_DISTANCE = 0.15;
+const SWIPE_WINDOW_MS = 600;
+
 export async function startHandGestures(
   videoEl: HTMLVideoElement,
-  { onHands, onFist, onPeaceSign, onCoyoteSign }: HandGestureCallbacks
+  { onHands, onFist, onPeaceSign, onCoyoteSign, onSwipe }: HandGestureCallbacks
 ): Promise<HandGestureHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 240 } },
@@ -114,6 +139,13 @@ export async function startHandGestures(
   let wasCoyoteSign = false;
   let smoothedLeft: HandPoint | null = null;
   let smoothedRight: HandPoint | null = null;
+  // Swipe tracking: armed the moment the pointing shape first appears, then
+  // watches for enough net horizontal travel within the window before it
+  // resets. `fired` blocks a second swipe from the same held pose — you
+  // have to relax the shape and re-point to swipe again.
+  let swipeAnchorX: number | null = null;
+  let swipeAnchorT = 0;
+  let swipeFired = false;
 
   const tick = () => {
     if (stopped) return;
@@ -150,6 +182,32 @@ export async function startHandGestures(
       const isCoyoteSign = result.landmarks.some((lm) => isCoyoteShape(lm));
       if (isCoyoteSign && !wasCoyoteSign) onCoyoteSign?.();
       wasCoyoteSign = isCoyoteSign;
+
+      const pointingLm = result.landmarks.find((lm) => isTwoFingerPoint(lm));
+      if (pointingLm) {
+        const x = 1 - pointingLm[8].x; // mirrored, same convention as onHands
+        const now = performance.now();
+        if (swipeAnchorX === null) {
+          swipeAnchorX = x;
+          swipeAnchorT = now;
+          swipeFired = false;
+        } else if (!swipeFired) {
+          const elapsed = now - swipeAnchorT;
+          const dx = x - swipeAnchorX;
+          if (elapsed <= SWIPE_WINDOW_MS && Math.abs(dx) >= SWIPE_DISTANCE) {
+            onSwipe?.(dx > 0 ? "right" : "left");
+            swipeFired = true;
+          } else if (elapsed > SWIPE_WINDOW_MS) {
+            // Window lapsed without a swipe — slide the anchor forward so
+            // slow drift while holding the pose doesn't quietly accumulate
+            // into a false trigger later.
+            swipeAnchorX = x;
+            swipeAnchorT = now;
+          }
+        }
+      } else {
+        swipeAnchorX = null;
+      }
     }
     raf = requestAnimationFrame(tick);
   };

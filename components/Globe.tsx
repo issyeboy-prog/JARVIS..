@@ -39,6 +39,35 @@ function lonLatToUV(lon: number, lat: number): [number, number] {
   return [(lon + 180) / 360, (lat + 90) / 180];
 }
 
+// The root group's rotation is plain X-then-Y Euler (no Z, no quaternions)
+// — this solves that same system in reverse: given a local direction `dir`
+// (a continent's fixed, un-rotated outward normal), what (rx, ry) brings
+// that exact direction to face the camera at (0,0,+1)? Derived by solving
+// Rx(rx) * Ry(ry) * dir = (0,0,1) component-wise; see the exploded
+// derivation in the coyote-sign handler below for why this is safe to
+// reuse for both "center on nearest" and "step to the next continent."
+function computeCenterRotation(dir: THREE.Vector3): { rx: number; ry: number } {
+  const ry = Math.atan2(-dir.x, dir.z);
+  const rx = Math.atan2(dir.y, Math.sqrt(dir.x * dir.x + dir.z * dir.z));
+  return { rx, ry };
+}
+
+// Wraps an angle delta into (-π, π] — without this, animating toward a raw
+// atan2 target after the globe has drifted through many full rotations
+// makes the spring unwind all of those turns instead of taking the short
+// way there.
+function wrapAngleDelta(delta: number): number {
+  const twoPi = Math.PI * 2;
+  let d = delta % twoPi;
+  if (d > Math.PI) d -= twoPi;
+  if (d < -Math.PI) d += twoPi;
+  return d;
+}
+
+function shortestAngleTarget(current: number, rawTarget: number): number {
+  return current + wrapAngleDelta(rawTarget - current);
+}
+
 // Rough, hand-drawn [lon, lat] outlines — recognizable silhouettes, not
 // surveyed coastlines.
 const NORTH_AMERICA = [
@@ -492,6 +521,61 @@ export default function Globe() {
   // the on-screen "locked" indicator; the draw loop reads the ref.
   const rotationLockedRef = useRef(false);
   const [rotationLocked, setRotationLocked] = useState(false);
+  // Populated once the WebGL scene builds its continent pieces — read by
+  // the coyote-sign/swipe handlers below, which are wired up in a
+  // different effect (hand tracking starts independently of the canvas)
+  // and so can't just close over the WebGL effect's own local variables.
+  const continentsRef = useRef<{ id: string; explodeDir: THREE.Vector3 }[]>([]);
+
+  // Finds whichever continent is nearest the center of the current view
+  // (smallest combined angular distance on both axes) and smoothly
+  // re-centers on it — the "lock onto the middle one" behavior.
+  const centerOnNearestContinent = () => {
+    const list = continentsRef.current;
+    if (list.length === 0) return;
+    let best = list[0];
+    let bestDist = Infinity;
+    for (const c of list) {
+      const { rx, ry } = computeCenterRotation(c.explodeDir);
+      const dx = wrapAngleDelta(rx - rotRef.current.x);
+      const dy = wrapAngleDelta(ry - rotRef.current.y);
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = c;
+      }
+    }
+    const { rx, ry } = computeCenterRotation(best.explodeDir);
+    targetRotRef.current.x = shortestAngleTarget(rotRef.current.x, rx);
+    targetRotRef.current.y = shortestAngleTarget(rotRef.current.y, ry);
+  };
+
+  // Steps to whichever continent is the next one over in yaw, in the given
+  // direction, from wherever the view is centered right now — not
+  // necessarily from a continent exactly at the middle.
+  const stepToAdjacentContinent = (direction: "left" | "right") => {
+    const list = continentsRef.current;
+    if (list.length === 0) return;
+    let best: { id: string; explodeDir: THREE.Vector3 } | null = null;
+    let bestDelta = Infinity;
+    for (const c of list) {
+      const { ry } = computeCenterRotation(c.explodeDir);
+      const delta = wrapAngleDelta(ry - rotRef.current.y);
+      // Increasing yaw brings a continent that was to the left into
+      // center (see the drag-handler comment below for the full sign
+      // derivation) — so a positive delta is "to the left" and a negative
+      // delta is "to the right" of wherever we're centered now.
+      const signed = direction === "right" ? -delta : delta;
+      if (signed > 0.001 && signed < bestDelta) {
+        bestDelta = signed;
+        best = c;
+      }
+    }
+    if (!best) return;
+    const { rx, ry } = computeCenterRotation(best.explodeDir);
+    targetRotRef.current.x = shortestAngleTarget(rotRef.current.x, rx);
+    targetRotRef.current.y = shortestAngleTarget(rotRef.current.y, ry);
+  };
 
   useEffect(() => {
     levelRef.current = Math.max(micLevel, ttsLevel);
@@ -547,8 +631,14 @@ export default function Globe() {
             const dx = drive.x - last.x;
             const dy = drive.y - last.y;
             const DRAG_SENSITIVITY = 22;
-            targetRotRef.current.y += dx * DRAG_SENSITIVITY;
-            targetRotRef.current.x += dy * DRAG_SENSITIVITY;
+            // Mirrored, not inverted: dragging your hand right should feel
+            // like grabbing the globe's surface and pulling that point
+            // toward you (so what's under your hand moves right with it),
+            // which means the *rotation* goes the other way — the same
+            // reason turning a real globe a with a fingertip on its right
+            // side rotates it opposite to how the front-center point moves.
+            targetRotRef.current.y -= dx * DRAG_SENSITIVITY;
+            targetRotRef.current.x -= dy * DRAG_SENSITIVITY;
           }
           lastHandPosRef.current = drive;
         },
@@ -561,11 +651,26 @@ export default function Globe() {
         onFist: () => {
           explodeTargetRef.current = 0;
         },
-        // Coyote sign: freeze rotation in place (assembled or exploded) so
-        // the continent names/news are readable, toggled off the same way.
+        // Coyote sign: snap to whichever continent is nearest the middle
+        // of the view right now, then freeze rotation there (assembled or
+        // exploded) so names/news are readable. Toggled off the same way,
+        // which just resumes normal drift/drag with no position change.
         onCoyoteSign: () => {
-          rotationLockedRef.current = !rotationLockedRef.current;
-          setRotationLocked(rotationLockedRef.current);
+          const locking = !rotationLockedRef.current;
+          if (locking) centerOnNearestContinent();
+          rotationLockedRef.current = locking;
+          setRotationLocked(locking);
+        },
+        // Two-finger point + swipe: step to the next continent over in
+        // that direction and lock onto it (starting a fresh lock if one
+        // wasn't already active) — this is meant as a reading aid, so
+        // landing anywhere other than centered-and-still isn't useful.
+        onSwipe: (direction) => {
+          stepToAdjacentContinent(direction);
+          if (!rotationLockedRef.current) {
+            rotationLockedRef.current = true;
+            setRotationLocked(true);
+          }
         },
       });
       setHandStatus("active");
@@ -718,9 +823,9 @@ export default function Globe() {
         seed = (seed * 16807) % 2147483647;
         return seed / 2147483647;
       };
-      // Faint neon tints instead of flat white — an iridescent, "poppy"
-      // cloud deck rather than a plain overcast one.
-      const CLOUD_TINTS = ["210,240,255", "255,255,255", "225,215,255", "205,255,240"];
+      // Natural white/pale-grey tints — real cloud tops, not an
+      // iridescent neon deck.
+      const CLOUD_TINTS = ["255,255,255", "240,244,250", "225,230,238", "250,248,244"];
       for (let i = 0; i < 55; i++) {
         const x = rand() * cloudCanvas.width;
         const y = rand() * cloudCanvas.height;
@@ -823,6 +928,8 @@ export default function Globe() {
       }
     });
 
+    continentsRef.current = continents.map((c) => ({ id: c.id, explodeDir: c.explodeDir }));
+
     fetch("/api/news")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { continents?: Record<string, { title: string }[]> } | null) => {
@@ -846,18 +953,31 @@ export default function Globe() {
     const tethers = new THREE.LineSegments(tetherGeo, tetherMat);
     root.add(tethers);
 
-    // Outer atmosphere shell — a backside-rendered sphere with additive
-    // blending gives a cheap fresnel-style glow at the rim.
-    const atmoMat = new THREE.MeshBasicMaterial({
-      color: ATMO_HEX,
-      transparent: true,
-      opacity: 0.1,
-      side: THREE.BackSide,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+    // Layered atmosphere shells — several nested backside-rendered spheres
+    // at increasing radius and decreasing opacity, instead of one flat
+    // shell. A single shell has a hard-ish edge; stacking several fakes
+    // the smooth exponential falloff of real atmospheric scattering (the
+    // thin, soft blue limb glow you see on Earth-from-space photography
+    // and in Interstellar's planet shots) without writing a custom shader.
+    const ATMO_LAYERS = [
+      { scale: 1.1, opacity: 0.16 },
+      { scale: 1.16, opacity: 0.1 },
+      { scale: 1.24, opacity: 0.06 },
+      { scale: 1.34, opacity: 0.03 },
+    ];
+    const atmoMats: THREE.MeshBasicMaterial[] = ATMO_LAYERS.map((layer) => {
+      const mat = new THREE.MeshBasicMaterial({
+        color: ATMO_HEX,
+        transparent: true,
+        opacity: layer.opacity,
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * layer.scale, 32, 24), mat);
+      root.add(shell);
+      return mat;
     });
-    const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * 1.18, 32, 24), atmoMat);
-    root.add(atmosphere);
 
     // Slow, independently-spinning targeting ring — a classic sci-fi HUD
     // touch, decoupled from the hand-driven rotation. Kept magenta as the
@@ -865,7 +985,7 @@ export default function Globe() {
     const ringMat = new THREE.MeshBasicMaterial({
       color: RING_HEX,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.28,
       side: THREE.DoubleSide,
     });
     const ring = new THREE.Mesh(new THREE.TorusGeometry(EARTH_RADIUS * 1.35, 0.007, 8, 64), ringMat);
@@ -879,10 +999,14 @@ export default function Globe() {
       spin: THREE.Group; // rotated each frame — carries only the satellite
       speed: number;
     }
+    // Neutral, near-realistic tones (pale white/blue/amber like actual
+    // satellite/station running lights) instead of saturated neon — the
+    // ring stays the one deliberate accent color, everything else here
+    // leans toward "Interstellar," not cyberpunk.
     const SATELLITES: { radius: number; incline: number; speed: number; color: number }[] = [
-      { radius: 1.55, incline: 0.5, speed: 0.006, color: 0xff2bd6 },
-      { radius: 1.72, incline: -0.35, speed: -0.0045, color: 0x4fe0ff },
-      { radius: 1.42, incline: 1.1, speed: 0.008, color: 0xfff2d0 },
+      { radius: 1.55, incline: 0.5, speed: 0.006, color: 0xdbeeff },
+      { radius: 1.72, incline: -0.35, speed: -0.0045, color: 0x8fc4ff },
+      { radius: 1.42, incline: 1.1, speed: 0.008, color: 0xffe6b0 },
     ];
     const satelliteMats: THREE.MeshBasicMaterial[] = [];
     const satelliteRingMats: THREE.MeshBasicMaterial[] = [];
@@ -895,7 +1019,7 @@ export default function Globe() {
       const orbitMat = new THREE.MeshBasicMaterial({
         color: s.color,
         transparent: true,
-        opacity: 0.18,
+        opacity: 0.1,
         side: THREE.DoubleSide,
       });
       satelliteRingMats.push(orbitMat);
@@ -956,11 +1080,43 @@ export default function Globe() {
     halo.scale.set(2.9, 2.9, 1);
     scene.add(halo);
 
-    // Bloom so the emissive bits (grid lines, landmasses, ring) actually
-    // glow instead of just being a flat bright color.
+    // A small lens-flare-style glow sitting out along the key light's
+    // direction, in world space (not rotated with the globe, same as the
+    // light itself) — a cheap but very recognizable "sunlit" cinematic
+    // cue, rendered on top (depthTest off) like a real flare would be.
+    const sunDir = new THREE.Vector3(1.6, 2.2, 2.4).normalize();
+    const flareCanvas = document.createElement("canvas");
+    flareCanvas.width = flareCanvas.height = 128;
+    const flareCtx = flareCanvas.getContext("2d");
+    if (flareCtx) {
+      const g = flareCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      g.addColorStop(0, "rgba(255,250,235,1)");
+      g.addColorStop(0.25, "rgba(255,240,210,0.65)");
+      g.addColorStop(0.6, "rgba(255,220,180,0.12)");
+      g.addColorStop(1, "rgba(255,220,180,0)");
+      flareCtx.fillStyle = g;
+      flareCtx.fillRect(0, 0, 128, 128);
+    }
+    const flareTex = new THREE.CanvasTexture(flareCanvas);
+    const flareMat = new THREE.SpriteMaterial({
+      map: flareTex,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const flare = new THREE.Sprite(flareMat);
+    flare.position.copy(sunDir).multiplyScalar(6);
+    flare.scale.set(1.1, 1.1, 1);
+    scene.add(flare);
+
+    // Bloom, tuned down from the original neon-cyberpunk pass — a
+    // restrained glow on genuinely bright/emissive points (the sun glint,
+    // city lights, satellites) reads as cinematic; blooming everything
+    // reads as a video-game HUD.
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.45, 0.4, 0.4);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.32, 0.45, 0.55);
     composer.addPass(bloom);
 
     let viewW = 1;
@@ -998,10 +1154,11 @@ export default function Globe() {
         targetRotRef.current.y += 0.0012;
       }
 
-      // Viscous spring: rendered rotation chases the target with heavy
-      // damping and a little overshoot — loose and gooey, not precise.
-      const STIFFNESS = 0.02;
-      const DAMPING = 0.82;
+      // Spring: rendered rotation chases the target — tightened up from
+      // the original "gooey" feel, which read as laggy once hand-drag and
+      // the swipe/lock navigation needed to feel immediate.
+      const STIFFNESS = 0.055;
+      const DAMPING = 0.72;
       const errX = targetRotRef.current.x - rotRef.current.x;
       const errY = targetRotRef.current.y - rotRef.current.y;
       rotVelRef.current.x = rotVelRef.current.x * DAMPING + errX * STIFFNESS;
@@ -1062,7 +1219,7 @@ export default function Globe() {
       oceanMat.emissiveIntensity = 0.08 + lvl * 0.15;
       landMats.forEach((m) => (m.emissiveIntensity = 0.1 + lvl * 0.2));
       coreLight.intensity = (0.5 + lvl * 1.1) * (1 - explode * 0.3);
-      bloom.strength = 0.4 + lvl * 0.35;
+      bloom.strength = 0.28 + lvl * 0.22;
       ring.rotation.z += 0.0025;
       cloud.rotation.y += 0.0007;
       stars.rotation.y += 0.00015;
@@ -1083,6 +1240,8 @@ export default function Globe() {
       renderer.dispose();
       haloTex.dispose();
       earthTex.dispose();
+      flareTex.dispose();
+      flareMat.dispose();
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
           obj.geometry.dispose();
@@ -1094,7 +1253,7 @@ export default function Globe() {
       cloudMat.dispose();
       landMats.forEach((m) => m.dispose());
       landEdgeMats.forEach((m) => m.dispose());
-      atmoMat.dispose();
+      atmoMats.forEach((m) => m.dispose());
       ringMat.dispose();
       tetherMat.dispose();
       starGeo.dispose();
